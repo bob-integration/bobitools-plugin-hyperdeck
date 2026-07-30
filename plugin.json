@@ -1,0 +1,58 @@
+{
+  "license": "GPL-3.0-or-later",
+  "type": "hyperdeck",
+  "label": "HyperDeck",
+  "version": "0.1.0",
+  "runtime": "docker",
+  "description": "Pilotage d'un parc d'enregistreurs Blackmagic HyperDeck (Studio, Extreme, Shuttle) via le HyperDeck Ethernet Protocol (TCP 9993). Connexion PERMANENTE par machine : l'état affiché vient des notifications asynchrones de l'appareil, pas d'une interrogation périodique. Statut transport (lecture / enregistrement / timecode), état des slots et médias (durée restante, système de fichiers), réglages complets (entrées vidéo/audio, format de fichier, timecode, référence, préfixe d'enregistrement), transport à distance et actions GROUPÉES (REC / STOP simultanés sur plusieurs machines). VOLUMES RÉSEAU : bibliothèque de chemins (serveur, identifiant, partage) tenue par l'outil, appliquée en un clic à une ou plusieurs machines, avec une matrice chemins × machines qui distingue signet, partage sélectionné et volume réellement monté. Conteneur Docker isolé.",
+  "badge": {
+    "label": "HD",
+    "class": "tool-hyperdeck",
+    "oklch": "0.70 0.17 25"
+  },
+  "nav": {
+    "section": "enregistreurs",
+    "label": "Enregistreurs",
+    "order": 20
+  },
+  "ui": {
+    "page_html": "page.html",
+    "page_js": "page.js",
+    "page_css": "page.css"
+  },
+  "docker": {
+    "image": "bobitool-hyperdeck:0.1.0",
+    "build": true,
+    "port": 8080,
+    "volume": "/data",
+    "env_settings": [
+      "refresh_interval",
+      "live_timecode",
+      "connect_timeout"
+    ]
+  },
+  "config_schema": [
+    {
+      "key": "refresh_interval",
+      "type": "number",
+      "default": 20,
+      "min": 5,
+      "max": 300,
+      "label": "Relecture complète de l'état (secondes) — filet de sécurité si une notification est perdue"
+    },
+    {
+      "key": "live_timecode",
+      "type": "checkbox",
+      "default": true,
+      "label": "Timecode en direct (abonne l'outil aux notifications de timecode — trafic accru)"
+    },
+    {
+      "key": "connect_timeout",
+      "type": "number",
+      "default": 4,
+      "min": 1,
+      "max": 30,
+      "label": "Délai d'attente de connexion TCP (secondes)"
+    }
+  ]
+}

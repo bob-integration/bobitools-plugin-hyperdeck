@@ -1,0 +1,181 @@
+<!-- HyperDeck — fragment monté par window.BTTools.hyperdeck.mount(el, ctx).
+     Front pur : toute la logique tourne dans le conteneur, atteinte via ctx.api(...).
+
+     Deux VUES pleine page sous une barre d'onglets : Parc (cartes + détail) et Vue
+     d'ensemble (tableau une ligne par machine, celui qu'on laisse affiché en tournage).
+
+     L'UI ne présuppose aucun modèle : les réglages affichés sont ceux que l'appareil a
+     réellement renvoyés, et le détail est entièrement construit en JS à partir de l'état
+     rendu par le serveur. -->
+<div class="hd-app">
+
+  <div class="hd-bar">
+    <strong class="hd-title" data-i18n="plugin.hyperdeck.title">HyperDeck</strong>
+    <span class="hd-meta" id="hd-meta"></span>
+    <span class="hd-spacer"></span>
+    <label class="toggle-inline hd-livebox">
+      <input type="checkbox" class="ios-toggle" id="hd-live" checked>
+      <span data-i18n="plugin.hyperdeck.live">Suivi en direct</span>
+    </label>
+    <button class="btn" id="hd-refresh" type="button" title="Actualiser">↻</button>
+    <button class="btn" id="hd-export" type="button" data-i18n="plugin.hyperdeck.export">Exporter</button>
+    <button class="btn" id="hd-import-btn" type="button" data-i18n="plugin.hyperdeck.import">Importer</button>
+    <input type="file" id="hd-import" accept="application/json" hidden>
+    <button class="btn btn-green" id="hd-add" type="button" data-i18n="plugin.hyperdeck.add">+ Ajouter un HyperDeck</button>
+  </div>
+
+  <nav class="hd-views" id="hd-views">
+    <button class="hd-view-tab on" data-view="fleet" type="button" data-i18n="plugin.hyperdeck.view.fleet">Parc</button>
+    <button class="hd-view-tab" data-view="overview" type="button" data-i18n="plugin.hyperdeck.view.overview">Vue d'ensemble</button>
+    <button class="hd-view-tab" data-view="nas" type="button" data-i18n="plugin.hyperdeck.view.nas">Volumes réseau</button>
+  </nav>
+
+  <!-- ══ Vue : Parc ═══════════════════════════════════════════════ -->
+  <div class="hd-view" id="hd-view-fleet">
+
+    <form class="hd-form" id="hd-form" hidden>
+      <div class="hd-form-grid">
+        <label for="hd-f-name" data-i18n="plugin.hyperdeck.f.name">Nom</label>
+        <input type="text" id="hd-f-name" placeholder="HyperDeck régie 1">
+
+        <label for="hd-f-host" data-i18n="plugin.hyperdeck.f.host">Adresse IP</label>
+        <input type="text" id="hd-f-host" placeholder="10.10.20.31">
+
+        <label for="hd-f-port" data-i18n="plugin.hyperdeck.f.port">Port</label>
+        <input type="number" id="hd-f-port" min="1" max="65535" value="9993">
+
+        <label for="hd-f-group" data-i18n="plugin.hyperdeck.f.group">Groupe</label>
+        <input type="text" id="hd-f-group" list="hd-groups" placeholder="Régie">
+        <datalist id="hd-groups"></datalist>
+
+        <label for="hd-f-user" data-i18n="plugin.hyperdeck.f.user">Identifiant (mode sécurisé)</label>
+        <input type="text" id="hd-f-user" autocomplete="off" placeholder="(vide si non sécurisé)">
+
+        <label for="hd-f-password" data-i18n="plugin.hyperdeck.f.password">Mot de passe</label>
+        <input type="password" id="hd-f-password" autocomplete="new-password" placeholder="(inchangé si vide)">
+
+        <label for="hd-f-notes" data-i18n="plugin.hyperdeck.f.notes">Notes</label>
+        <input type="text" id="hd-f-notes" placeholder="Emplacement, usage…">
+
+        <label for="hd-f-enabled" data-i18n="plugin.hyperdeck.f.enabled">Activée</label>
+        <span><input type="checkbox" class="ios-toggle" id="hd-f-enabled" checked></span>
+      </div>
+      <p class="hd-form-note" id="hd-f-note"></p>
+      <div class="hd-form-actions">
+        <button class="btn btn-green" type="submit" data-i18n="plugin.hyperdeck.save">Enregistrer</button>
+        <button class="btn" type="button" id="hd-f-cancel" data-i18n="plugin.hyperdeck.cancel">Annuler</button>
+      </div>
+    </form>
+
+    <div class="hd-main">
+      <div class="hd-fleet">
+        <div class="hd-fleet-h">
+          <label class="hd-selall">
+            <input type="checkbox" id="hd-selall">
+            <span data-i18n="plugin.hyperdeck.selectAll">Tout sélectionner</span>
+          </label>
+          <span class="hd-count" id="hd-count"></span>
+        </div>
+        <div class="hd-cards" id="hd-cards">
+          <p class="hd-empty" data-i18n="plugin.hyperdeck.loading">Chargement du parc…</p>
+        </div>
+      </div>
+      <div class="hd-detail" id="hd-detail">
+        <p class="hd-empty" data-i18n="plugin.hyperdeck.pick">Sélectionnez une machine pour voir son détail.</p>
+      </div>
+    </div>
+
+    <!-- Barre d'actions groupées : n'apparaît qu'avec une sélection. C'est la raison
+         d'être de l'outil en direct — lancer six machines ensemble. -->
+    <div class="hd-bulk" id="hd-bulk" hidden>
+      <span class="hd-bulk-n" id="hd-bulk-n"></span>
+      <button class="btn btn-red" id="hd-bulk-rec" type="button" data-i18n="plugin.hyperdeck.bulk.rec">⏺ Enregistrer</button>
+      <button class="btn" id="hd-bulk-stop" type="button" data-i18n="plugin.hyperdeck.bulk.stop">⏹ Stop</button>
+      <button class="btn btn-green" id="hd-bulk-play" type="button" data-i18n="plugin.hyperdeck.bulk.play">▶ Lecture</button>
+      <input type="text" id="hd-bulk-name" placeholder="Nom du clip (facultatif)">
+      <span class="hd-spacer"></span>
+      <select id="hd-bulk-key"></select>
+      <input type="text" id="hd-bulk-value" placeholder="Valeur">
+      <button class="btn" id="hd-bulk-apply" type="button" data-i18n="plugin.hyperdeck.bulk.apply">Appliquer le réglage</button>
+      <button class="btn" id="hd-bulk-clear" type="button" data-i18n="plugin.hyperdeck.bulk.clear">Désélectionner</button>
+    </div>
+    <div class="hd-report" id="hd-report" hidden></div>
+  </div>
+
+  <!-- ══ Vue : Vue d'ensemble ═════════════════════════════════════ -->
+  <div class="hd-view" id="hd-view-overview" hidden>
+    <div class="hd-ov-h">
+      <button class="btn" id="hd-ov-refresh" type="button" data-i18n="plugin.hyperdeck.refresh">Actualiser</button>
+      <span class="hd-meta" id="hd-ov-meta"></span>
+    </div>
+    <div id="hd-ov"></div>
+  </div>
+
+  <!-- ══ Vue : Volumes réseau ═════════════════════════════════════
+       Une bibliothèque de chemins tenue par l'OUTIL (saisis une fois), qu'on applique
+       ensuite aux machines. La matrice du bas montre ce qui est réellement réglé côté
+       réseau, machine par machine. -->
+  <div class="hd-view" id="hd-view-nas" hidden>
+
+    <div class="hd-bar">
+      <strong class="hd-title" data-i18n="plugin.hyperdeck.nas.lib">Chemins réseau de l'outil</strong>
+      <span class="hd-meta" id="hd-nas-meta"></span>
+      <span class="hd-spacer"></span>
+      <button class="btn" id="hd-nas-reread" type="button" data-i18n="plugin.hyperdeck.nas.reread">↻ Relire les machines</button>
+      <button class="btn btn-green" id="hd-nas-add" type="button" data-i18n="plugin.hyperdeck.nas.add">+ Ajouter un chemin</button>
+    </div>
+
+    <form class="hd-form" id="hd-nas-form" hidden>
+      <div class="hd-form-grid">
+        <label for="hd-n-label" data-i18n="plugin.hyperdeck.nas.f.label">Nom</label>
+        <input type="text" id="hd-n-label" placeholder="Rushes plateau">
+
+        <label for="hd-n-url" data-i18n="plugin.hyperdeck.nas.f.url">Adresse du partage</label>
+        <input type="text" id="hd-n-url" placeholder="smb://10.10.20.10/Rushes">
+
+        <label for="hd-n-username" data-i18n="plugin.hyperdeck.nas.f.user">Identifiant</label>
+        <input type="text" id="hd-n-username" autocomplete="off" placeholder="(vide = invité)">
+
+        <label for="hd-n-password" data-i18n="plugin.hyperdeck.nas.f.password">Mot de passe</label>
+        <input type="password" id="hd-n-password" autocomplete="new-password" placeholder="(inchangé si vide)">
+
+        <label for="hd-n-notes" data-i18n="plugin.hyperdeck.nas.f.notes">Notes</label>
+        <input type="text" id="hd-n-notes" placeholder="Serveur, usage…">
+      </div>
+      <p class="hd-form-note" id="hd-n-note"></p>
+      <div class="hd-form-actions">
+        <button class="btn btn-green" type="submit" data-i18n="plugin.hyperdeck.save">Enregistrer</button>
+        <button class="btn" type="button" id="hd-n-cancel" data-i18n="plugin.hyperdeck.cancel">Annuler</button>
+      </div>
+    </form>
+
+    <div id="hd-nas-list"></div>
+
+    <!-- Appliquer un chemin à un sous-ensemble de machines -->
+    <div class="hd-apply">
+      <div class="hd-apply-h">
+        <strong data-i18n="plugin.hyperdeck.nas.apply">Appliquer à des machines</strong>
+        <span class="hd-meta" id="hd-nas-targets-n"></span>
+      </div>
+      <div class="hd-inline">
+        <label data-i18n="plugin.hyperdeck.nas.path">Chemin <select id="hd-nas-pick"></select></label>
+        <label data-i18n="plugin.hyperdeck.nas.action">Action <select id="hd-nas-mode">
+          <option value="add_select">Enregistrer le signet et monter</option>
+          <option value="add">Enregistrer le signet seulement</option>
+          <option value="select">Monter (signet déjà présent)</option>
+          <option value="remove">Retirer le signet</option>
+          <option value="deselect">Démonter le volume réseau</option>
+        </select></label>
+        <button class="btn btn-green" id="hd-nas-apply" type="button" data-i18n="plugin.hyperdeck.nas.doApply">Appliquer</button>
+        <button class="btn" id="hd-nas-all" type="button" data-i18n="plugin.hyperdeck.nas.all">Tout cocher</button>
+        <button class="btn" id="hd-nas-none" type="button" data-i18n="plugin.hyperdeck.nas.none">Tout décocher</button>
+      </div>
+      <div class="hd-targets" id="hd-nas-targets"></div>
+    </div>
+
+    <h4 class="hd-h4" data-i18n="plugin.hyperdeck.nas.state">Ce qui est réglé côté réseau</h4>
+    <div id="hd-nas-grid"></div>
+    <div class="hd-report" id="hd-nas-report" hidden></div>
+  </div>
+
+</div>

@@ -1,0 +1,207 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later
+   Styles de l'outil « HyperDeck ». Vocabulaire décalqué de ptz / bmd_nmos (cards, dots de
+   statut, tables) sous préfixe .hd-*. Uniquement des variables de thème du socle
+   (DESIGN.md) — aucune couleur littérale — et .btn / .ios-toggle globaux.
+
+   Règle « Statut > Couleur » appliquée partout : la pastille et le badge d'état portent
+   toujours leur libellé texte. Un HyperDeck en enregistrement doit se voir en noir et
+   blanc comme en couleur. */
+
+.hd-app { display: flex; flex-direction: column; gap: 14px; }
+
+.hd-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hd-title { font-size: 15px; }
+.hd-spacer { flex: 1; }
+.hd-meta { color: var(--text-muted); font-size: 12px; }
+.hd-livebox { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); }
+
+/* Formulaire ajout / édition */
+.hd-form { background: var(--bg-soft, var(--bg-elev)); border: 1px solid var(--border);
+  padding: 14px; border-radius: var(--radius); }
+.hd-form-grid { display: grid; grid-template-columns: max-content 1fr; gap: 8px 12px; align-items: center; }
+.hd-form-grid input, .hd-form-grid select { width: 100%; box-sizing: border-box; }
+.hd-form-actions { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
+.hd-form-note { color: var(--status-warning-fg); font-size: 12px; margin: 10px 0 0; }
+.hd-form-note:empty { display: none; }
+
+/* Onglets de premier niveau */
+.hd-views { display: flex; gap: 2px; border-bottom: 1px solid var(--border); }
+.hd-view-tab { background: none; border: none; border-bottom: 2px solid transparent;
+  color: var(--text-muted); padding: 8px 14px; cursor: pointer; font: inherit; font-size: 13.5px; }
+.hd-view-tab:hover { color: var(--text); }
+.hd-view-tab.on { color: var(--text-strong); border-bottom-color: var(--accent); }
+.hd-view { display: flex; flex-direction: column; gap: 14px; }
+.hd-view[hidden] { display: none; }
+
+/* Disposition principale : parc / détail */
+.hd-main { display: grid; grid-template-columns: minmax(300px, 400px) 1fr; gap: 14px; align-items: start; }
+@media (max-width: 950px) { .hd-main { grid-template-columns: 1fr; } }
+
+.hd-fleet-h { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.hd-selall { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); cursor: pointer; }
+.hd-count { margin-left: auto; color: var(--text-muted); font-size: 12px; }
+
+.hd-cards { display: flex; flex-direction: column; gap: 8px; }
+.hd-card { border: 1px solid var(--border); background: var(--bg-elev); border-radius: var(--radius);
+  padding: 10px 12px; cursor: pointer; transition: border-color .12s; }
+.hd-card:hover { border-color: var(--accent); }
+.hd-card.sel { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.hd-card.off { opacity: .55; }
+.hd-card-h { display: flex; align-items: center; gap: 8px; }
+.hd-card-h strong { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hd-card-h .hd-actions { margin-left: auto; display: flex; gap: 4px; }
+.hd-card-sub { margin-top: 5px; color: var(--text-muted); font-size: 12px;
+  display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.hd-ip { font-family: var(--font-mono); font-size: 12px; }
+.hd-tc { font-family: var(--font-mono); font-size: 12.5px; color: var(--text-strong); }
+.hd-mono { font-family: var(--font-mono); font-size: 12px; }
+.hd-empty { color: var(--text-muted); font-size: 13px; padding: 8px 0; }
+.hd-tag { display: inline-block; padding: 1px 7px; border-radius: var(--radius-small); font-size: 11px;
+  background: var(--status-unknown-bg); color: var(--text-muted); }
+.hd-tag.warn { background: var(--status-warning-bg); color: var(--status-warning-fg); }
+.hd-note { display: block; color: var(--text-muted); font-size: 11px; margin-top: 2px; }
+
+/* Pastille de statut. Gris = état inconnu — volontairement distinct de « injoignable » :
+   ne jamais annoncer une machine en panne tant qu'on n'a pas essayé de lui parler. */
+.hd-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--status-unknown-fg); }
+.hd-dot.ok { background: var(--status-running-fg); }
+.hd-dot.err { background: var(--status-stopped-fg); }
+
+/* Badge d'état transport — toujours accompagné de son libellé. */
+.hd-badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px;
+  white-space: nowrap; background: var(--status-unknown-bg); color: var(--text-muted); }
+.hd-badge.on { background: var(--status-running-bg); color: var(--status-running-fg); }
+.hd-badge.rec { background: var(--status-stopped-bg); color: var(--status-stopped-fg); font-weight: 600; }
+.hd-badge.warn { background: var(--status-warning-bg); color: var(--status-warning-fg); }
+.hd-badge.off { background: var(--status-unknown-bg); color: var(--text-muted); }
+
+/* Panneau détail */
+.hd-detail { border: 1px solid var(--border); background: var(--bg-elev);
+  border-radius: var(--radius); padding: 14px; min-height: 200px; }
+.hd-detail-h { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+.hd-detail-h strong { font-size: 14px; }
+.hd-detail-actions { margin-left: auto; display: flex; gap: 6px; }
+.hd-ident { color: var(--text-muted); font-size: 12px; margin-bottom: 10px; }
+
+.hd-banner { border: 1px solid var(--border); border-radius: var(--radius-small);
+  padding: 8px 10px; font-size: 12.5px; margin-bottom: 10px;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hd-banner.warn { background: var(--status-warning-bg); color: var(--status-warning-fg);
+  border-color: var(--status-warning-fg); }
+.hd-banner.err { background: var(--status-stopped-bg); color: var(--status-stopped-fg);
+  border-color: var(--status-stopped-fg); }
+
+.hd-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.hd-tab { background: none; border: none; border-bottom: 2px solid transparent;
+  color: var(--text-muted); padding: 6px 12px; cursor: pointer; font: inherit; font-size: 13px; }
+.hd-tab:hover { color: var(--text); }
+.hd-tab.on { color: var(--text-strong); border-bottom-color: var(--accent); }
+
+/* Transport : les trois boutons vitaux sont volontairement gros. En régie on les vise
+   du coin de l'œil, pas en lisant. */
+.hd-transport { display: flex; flex-direction: column; gap: 12px; }
+.hd-tbtns { display: flex; gap: 8px; flex-wrap: wrap; }
+.hd-big { padding: 10px 18px; font-size: 14px; font-weight: 600; }
+.hd-inline { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12.5px;
+  color: var(--text-muted); }
+.hd-inline label { display: flex; gap: 6px; align-items: center; }
+.hd-inline input[type="text"], .hd-inline input[type="number"] { width: 180px; }
+.hd-inline input[type="number"] { width: 90px; }
+
+.hd-kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; font-size: 12.5px; }
+.hd-kv dt { color: var(--text-muted); }
+.hd-kv dd { margin: 0; font-family: var(--font-mono); font-size: 12px; color: var(--text); }
+
+.hd-danger { margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--border); }
+
+/* Réglages */
+.hd-settings h4, .hd-transport h4 { margin: 6px 0 6px; font-size: 12px; text-transform: uppercase;
+  letter-spacing: 1px; color: var(--text-muted); }
+.hd-set-grid { display: grid; grid-template-columns: minmax(180px, max-content) 1fr;
+  gap: 8px 14px; align-items: center; margin-bottom: 12px; }
+.hd-set-grid > label { font-size: 12.5px; }
+.hd-set-grid select, .hd-set-grid input[type="text"], .hd-set-grid input[type="number"] {
+  width: 100%; max-width: 340px; box-sizing: border-box; }
+
+/* Tables (slots, médias, événements, comptes-rendus) */
+.hd-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.hd-table th { text-align: left; color: var(--text-muted); font-weight: 600; font-size: 11px;
+  text-transform: uppercase; letter-spacing: .5px; padding: 6px 8px;
+  border-bottom: 1px solid var(--border); }
+.hd-table td { padding: 6px 8px; border-bottom: 1px solid var(--border-soft, var(--border)); }
+.hd-table tr.on td { background: var(--bg-selected, var(--bg-hover)); }
+.hd-table tr.rec td { background: var(--status-stopped-bg); }
+.hd-table tr.ko td { color: var(--status-stopped-fg); }
+
+/* Console */
+.hd-cons { margin-top: 10px; }
+.hd-cons-cmd { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); }
+.hd-cons-out { font-family: var(--font-mono); font-size: 12px; background: var(--bg-input);
+  border: 1px solid var(--border); border-radius: var(--radius-small); padding: 8px 10px;
+  margin: 4px 0 0; white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; }
+.hd-cons-out.err { border-color: var(--status-stopped-fg); color: var(--status-stopped-fg); }
+
+/* Barre d'actions groupées : collée en bas, elle reste atteignable en faisant défiler
+   un long parc. */
+.hd-bulk { position: sticky; bottom: 0; z-index: 2; display: flex; gap: 8px; align-items: center;
+  flex-wrap: wrap; background: var(--bg-elev); border: 1px solid var(--accent);
+  border-radius: var(--radius); padding: 10px 12px; }
+.hd-bulk[hidden] { display: none; }
+.hd-bulk-n { font-size: 12px; color: var(--text-muted); }
+.hd-bulk input[type="text"] { width: 200px; }
+
+.hd-report { border: 1px solid var(--border); background: var(--bg-elev);
+  border-radius: var(--radius); padding: 12px; }
+.hd-report[hidden] { display: none; }
+.hd-report-h { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+
+.hd-ov-h { display: flex; align-items: center; gap: 10px; }
+.hd-ov-table td { vertical-align: top; }
+.hd-sub { color: var(--text-muted); font-size: 11px; }
+
+/* ── Volumes réseau ─────────────────────────────────────────── */
+
+.hd-h4 { margin: 4px 0 0; font-size: 12px; text-transform: uppercase; letter-spacing: 1px;
+  color: var(--text-muted); }
+.hd-row-actions { white-space: nowrap; display: flex; gap: 4px; }
+
+.hd-apply { border: 1px solid var(--border); background: var(--bg-elev);
+  border-radius: var(--radius); padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.hd-apply-h { display: flex; align-items: baseline; gap: 10px; }
+.hd-apply select { max-width: 340px; }
+
+.hd-targets { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.hd-target { display: flex; align-items: center; gap: 6px; font-size: 12.5px;
+  border: 1px solid var(--border); border-radius: var(--radius-small); padding: 4px 9px; cursor: pointer; }
+.hd-target.off { opacity: .6; }
+
+/* Matrice chemins × machines. Convention Bobi.Tools : machines (destinataires du réglage)
+   en COLONNES, chemins en LIGNES. En-têtes collants pour qu'un grand parc reste lisible. */
+.hd-gridwrap { overflow: auto; max-height: 60vh; border: 1px solid var(--border);
+  border-radius: var(--radius); }
+.hd-nas-grid { border-collapse: separate; border-spacing: 0; }
+.hd-nas-grid thead th { position: sticky; top: 0; z-index: 2; background: var(--bg-elev);
+  border-bottom: 1px solid var(--border); }
+.hd-nas-grid .hd-corner { position: sticky; left: 0; z-index: 3; background: var(--bg-elev); }
+.hd-nas-grid .hd-rowh { position: sticky; left: 0; z-index: 1; background: var(--bg-elev);
+  text-align: left; font-weight: 400; padding: 6px 10px; border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-soft, var(--border)); min-width: 200px; }
+.hd-colh { display: flex; flex-direction: column; gap: 3px; align-items: flex-start;
+  min-width: 96px; text-transform: none; letter-spacing: 0; font-size: 12px; }
+
+/* Chaque cellule porte son LIBELLÉ : « signet » et « monté » ne se distinguent jamais par
+   la seule couleur (règle Statut > Couleur du socle). */
+.hd-cell { text-align: center; padding: 4px 6px; }
+.hd-cell .hd-cellbtn, .hd-cell > span { display: inline-block; width: 100%; box-sizing: border-box;
+  font: inherit; font-size: 11px; padding: 3px 6px; border-radius: 3px;
+  border: 1px solid transparent; background: var(--status-unknown-bg); color: var(--text-muted); }
+.hd-cell .hd-cellbtn { cursor: pointer; }
+.hd-cell .hd-cellbtn:hover { border-color: var(--accent); }
+.hd-cell.on .hd-cellbtn, .hd-cell.on > span {
+  background: var(--status-running-bg); color: var(--status-running-fg); font-weight: 600; }
+.hd-cell.warn .hd-cellbtn, .hd-cell.warn > span {
+  background: var(--status-warning-bg); color: var(--status-warning-fg); }
+.hd-cell.part .hd-cellbtn, .hd-cell.part > span {
+  background: var(--bg-hover); color: var(--text); }
+.hd-tag.on { background: var(--status-running-bg); color: var(--status-running-fg); }
