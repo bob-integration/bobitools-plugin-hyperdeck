@@ -159,6 +159,44 @@ Si la machine est en mode sécurisé, renseignez identifiant et mot de passe dan
 L'authentification est transparente : à la première réponse `122 authentication required`,
 l'outil s'authentifie puis rejoue la commande.
 
+## Agir sur plusieurs machines
+
+Cochez deux machines ou plus : **le panneau de détail devient celui de la sélection**. Ce
+sont les mêmes onglets et les mêmes champs que pour une machine seule — on ne réapprend
+pas une interface pour piloter un parc. Il n'y a donc **pas de barre d'actions groupées** :
+tout se fait là où l'on regarde déjà.
+
+- **Transport** — REC, Stop et Lecture portent le nombre de machines dans leur libellé
+  (« ⏺ Enregistrer · 6 machines »), et un tableau donne l'état de chacune.
+- **Réglages** — le formulaire est *fusionné* (voir ci-dessous).
+- **Horloge** — un serveur de temps à appliquer à tout le lot, et l'état de chaque machine.
+
+### Réglages fusionnés : commun ou divergent
+
+Chaque champ dit ce qu'il en est :
+
+| Cas | Affichage |
+|---|---|
+| Toutes les machines ont la même valeur | la valeur, comme d'habitude |
+| Les valeurs diffèrent | **« — valeurs différentes — »**, plus un repère `⚠ n valeurs` |
+| Le réglage n'existe pas partout | un compteur `2/5` (modèles différents) |
+
+Le repère `⚠ n valeurs` donne le détail **au survol** et **au clic** : quelle valeur, sur
+quelles machines nommément. On sait donc exactement ce qu'on s'apprête à écraser.
+
+> **Seuls les champs que vous touchez sont écrits.** Ouvrir l'écran et valider n'aligne
+> rien : les champs auxquels vous n'avez pas touché restent tels quels sur chaque machine.
+> Sans cette règle, consulter les réglages d'un parc suffirait à l'uniformiser par
+> accident sur la première machine venue.
+
+Un champ modifié se distingue visuellement, le bouton d'application compte les
+modifications en attente, et une confirmation récapitule ce qui va partir et sur combien de
+machines. Pour renoncer à une modification, ramenez le champ sur « — valeurs différentes — ».
+
+Une machine dont les réglages n'ont pas encore été lus (déconnectée, par exemple) est
+**nommée** en tête de panneau et ne compte pas dans les divergences : la traiter comme une
+valeur vide ferait apparaître des écarts qui n'existent pas.
+
 ## Horloge et NTP
 
 L'onglet **Horloge** d'une machine montre l'heure **telle que l'appareil la voit** — donc

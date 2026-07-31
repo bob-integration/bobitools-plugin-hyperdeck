@@ -359,6 +359,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"paths": [fleet.nas_public(p) for p in fleet.load_nas()]})
             if parts == ["nas", "matrix"]:
                 return self._nas_matrix()
+            if parts == ["selection"]:
+                ids = [i for i in (query.get("ids") or [""])[0].split(",") if i]
+                return self._selection(ids)
             if parts == ["clock"]:
                 # `refresh=1` : on redemande à toutes les machines. Sans ça, l'affichage
                 # se contente du cache — l'horloge n'a pas besoin d'être relue à la seconde.
@@ -598,6 +601,72 @@ class Handler(BaseHTTPRequestHandler):
         return out
 
     # -- lecture d'état ------------------------------------------------------
+
+    def _selection(self, ids):
+        """Réglages FUSIONNÉS d'un lot de machines.
+
+        Le principe de l'écran d'édition multiple : montrer les mêmes champs que pour une
+        machine seule, en distinguant ce qui est commun de ce qui diverge. Un champ
+        identique partout s'affiche avec sa valeur ; un champ qui diffère s'affiche vide
+        et porte le détail (quelle valeur sur quelles machines), pour qu'on sache
+        exactement ce qu'on écrase avant d'écrire.
+
+        Une machine déconnectée n'a pas de configuration lue : elle est comptée à part et
+        ne fait PAS diverger un champ — l'ignorer serait mentir, mais la traiter comme une
+        valeur vide ferait apparaître des divergences qui n'existent pas."""
+        decks = [d for d in fleet.load_decks() if d.get("id") in set(ids or [])]
+        if not decks:
+            return self._send(400, {"error": "aucune machine sélectionnée"})
+
+        rows, missing = [], []
+        for d in decks:
+            st = fleet.MANAGER.state(d["id"])
+            conf = st.get("configuration") or {}
+            entry = {"id": d["id"], "name": d.get("name") or d.get("host"),
+                     "connected": bool(st.get("connected")), "conf": conf,
+                     "summary": _summary(st)}
+            rows.append(entry)
+            if not conf:
+                missing.append(entry["name"])
+
+        described = [r for r in rows if r["conf"]]
+        merged = []
+        if described:
+            # L'union des clés, pas l'intersection : un réglage que seules certaines
+            # machines exposent (modèles différents) doit rester visible, en disant sur
+            # combien de machines il existe.
+            seen = {}
+            for r in described:
+                for p in schema.describe(r["conf"]):
+                    seen.setdefault(p["key"], dict(p, _decks=[]))
+            for r in described:
+                for p in schema.describe(r["conf"]):
+                    seen[p["key"]]["_decks"].append((r["name"], p["value"]))
+            for key, p in seen.items():
+                pairs = p.pop("_decks")
+                values = {}
+                for name, val in pairs:
+                    values.setdefault(str(val), []).append(name)
+                same = len(values) == 1 and len(pairs) == len(described)
+                choices = list(p.get("choices") or [])
+                for val in values:
+                    if choices and val not in choices:
+                        choices.append(val)
+                merged.append(dict(
+                    p, choices=choices, same=same,
+                    value=(pairs[0][1] if same else None),
+                    present=len(pairs), total=len(described),
+                    values=[{"value": v, "decks": names, "count": len(names)}
+                            for v, names in sorted(values.items(), key=lambda kv: -len(kv[1]))]))
+            order = {p["key"]: i for i, p in enumerate(schema.describe(described[0]["conf"]))}
+            merged.sort(key=lambda p: (order.get(p["key"], 999), p["label"]))
+
+        return self._send(200, {
+            "decks": [{k: v for k, v in r.items() if k != "conf"} for r in rows],
+            "settings": merged,
+            "sections": schema.sections(),
+            "unread": missing,
+        })
 
     def _detail(self, deck):
         state = fleet.MANAGER.state(deck["id"])

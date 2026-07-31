@@ -31,7 +31,6 @@ window.BTTools.hyperdeck = (function () {
     let live = true;
     let timer = null;
     let media = { slot: "", clips: [], source: "disk", error: null };
-    let bulkKeysFilled = false;        // la liste des réglages groupables n'est remplie qu'une fois
     let nasPaths = [];                 // bibliothèque de chemins réseau, tenue par l'outil
     let nasMatrix = { paths: [], decks: [], cells: {} };
     let nasTargets = new Set();        // machines cochées dans la vue Volumes réseau
@@ -89,12 +88,6 @@ window.BTTools.hyperdeck = (function () {
         $("#hd-form").addEventListener("submit", onFormSubmit);
         $("#hd-f-cancel").addEventListener("click", hideForm);
         $("#hd-selall").addEventListener("change", onSelectAll);
-        $("#hd-bulk-clear").addEventListener("click", () => { selected.clear(); renderCards(); });
-        $("#hd-bulk-rec").addEventListener("click", () => bulkTransport("record"));
-        $("#hd-bulk-stop").addEventListener("click", () => bulkTransport("stop"));
-        $("#hd-bulk-play").addEventListener("click", () => bulkTransport("play"));
-        $("#hd-bulk-apply").addEventListener("click", bulkSettings);
-        $("#hd-bulk-ntp-apply").addEventListener("click", bulkNtp);
         $("#hd-ov-refresh").addEventListener("click", loadOverview);
         $("#hd-nas-add").addEventListener("click", () => showNasForm(null));
         $("#hd-nas-form").addEventListener("submit", onNasFormSubmit);
@@ -243,7 +236,7 @@ window.BTTools.hyperdeck = (function () {
         if (cnt) cnt.textContent = n + (n > 1 ? " machines" : " machine");
         const sa = $("#hd-selall");
         if (sa) sa.checked = n > 0 && selected.size === n;
-        renderBulkBar();
+        onSelectionChanged();
     }
 
     function cardHtml(d) {
@@ -279,7 +272,7 @@ window.BTTools.hyperdeck = (function () {
         const pick = e.target && e.target.dataset ? e.target.dataset.pick : null;
         if (pick) {
             if (e.target.checked) selected.add(pick); else selected.delete(pick);
-            renderBulkBar();
+            onSelectionChanged();
             const sa = $("#hd-selall");
             if (sa) sa.checked = decks.length > 0 && selected.size === decks.length;
             return;
@@ -311,20 +304,18 @@ window.BTTools.hyperdeck = (function () {
         renderCards();
     }
 
-    function renderBulkBar() {
-        const bar = $("#hd-bulk");
-        if (!bar) return;
-        bar.hidden = selected.size === 0;
-        const n = $("#hd-bulk-n");
-        if (n) n.textContent = selected.size + (selected.size > 1 ? " machines" : " machine");
-        const sel = $("#hd-bulk-key");
-        if (sel && !bulkKeysFilled) {
-            // Réglages proposés à l'application groupée : ceux qui ont un sens sur tout un
-            // parc à la fois. Le reste se règle machine par machine.
-            const keys = ["file format", "video input", "audio input", "record prefix",
-                "timecode input", "record trigger", "default standard", "append timestamp"];
-            sel.innerHTML = keys.map((k) => '<option value="' + esc(k) + '">' + esc(k) + "</option>").join("");
-            bulkKeysFilled = true;
+    // La sélection ne commande plus une barre : elle décide de ce qu'affiche le panneau.
+    // Passer de deux machines à une (ou l'inverse) change donc la nature de l'écran, d'où
+    // la remise à zéro du brouillon d'édition — un champ « valeurs différentes » n'a plus
+    // de sens quand il ne reste qu'une machine.
+    function onSelectionChanged() {
+        if (selected.size > 1) {
+            selDirty = {};
+            loadSelection(true);
+        } else {
+            selData = null;
+            selDirty = {};
+            renderDetail(true);
         }
     }
 
@@ -390,6 +381,11 @@ window.BTTools.hyperdeck = (function () {
     // ── Détail ───────────────────────────────────────────────
     function renderDetail(force) {
         const host = $("#hd-detail");
+        // Dès qu'au moins deux machines sont cochées, le panneau cesse de décrire UNE
+        // machine pour décrire la SÉLECTION. Même écran, mêmes champs, mêmes gestes : ce
+        // qui change, c'est que chaque champ dit s'il est commun ou s'il diverge, et que
+        // les actions portent sur le lot. Il n'y a donc plus de barre séparée en bas.
+        if (selected.size > 1) return renderSelection(force);
         if (!selId || !detail) {
             if (!selId) {
                 host.innerHTML = '<p class="hd-empty">'
@@ -427,6 +423,198 @@ window.BTTools.hyperdeck = (function () {
                 + '" data-tab="' + k + '" type="button">' + esc(lab) + "</button>").join("")
             + "</nav>"
             + '<div class="hd-tabbody">' + tabBody(st, s) + "</div>";
+    }
+
+    // ── Panneau de SÉLECTION (deux machines ou plus) ─────────
+    // Remplace l'ancienne barre d'actions groupées. Trois règles tiennent tout l'écran :
+    //   1. les mêmes champs que pour une machine seule — on ne réapprend pas une UI ;
+    //   2. un champ qui diverge le DIT, et donne le détail : on sait ce qu'on écrase ;
+    //   3. seuls les champs touchés sont écrits — sinon ouvrir l'écran et valider
+    //      aligner ait silencieusement tout le parc sur la première machine venue.
+    let selData = null;         // dernier /selection reçu
+    let selDirty = {};          // clés modifiées dans le formulaire fusionné
+    const SEL_TABS = [["transport", "Transport"], ["settings", "Réglages"], ["clock", "Horloge"]];
+
+    async function loadSelection(force) {
+        const ids = Array.from(selected);
+        if (ids.length < 2) return;
+        try {
+            selData = await ctx.api("selection?ids=" + encodeURIComponent(ids.join(",")));
+        } catch (e) {
+            selData = { error: e.message };
+        }
+        renderSelection(force);
+    }
+
+    function renderSelection(force) {
+        const host = $("#hd-detail");
+        if (!SEL_TABS.some(([k]) => k === tab)) tab = "transport";
+        if (tab === "settings" && Object.keys(selDirty).length && !force) return;
+        if (!selData) {
+            host.innerHTML = '<p class="hd-empty">Lecture des ' + selected.size + " machines…</p>";
+            loadSelection(true);
+            return;
+        }
+        if (selData.error) {
+            host.innerHTML = '<p class="hd-empty">' + esc(selData.error) + "</p>";
+            return;
+        }
+        const decksSel = selData.decks || [];
+        const off = decksSel.filter((d) => !d.connected);
+        const rec = decksSel.filter((d) => (d.summary || {}).status === "record");
+        host.innerHTML =
+            '<div class="hd-detail-h hd-sel-h">'
+            + '<span class="hd-badge on">' + decksSel.length + " machines</span>"
+            + "<strong>" + esc(decksSel.map((d) => d.name).join(", ")) + "</strong>"
+            + (rec.length ? '<span class="hd-badge rec">' + rec.length + " en enregistrement</span>" : "")
+            + (off.length ? '<span class="hd-badge err" title="' + esc(off.map((d) => d.name).join(", "))
+                + '">' + off.length + " hors ligne</span>" : "")
+            + '<span class="hd-detail-actions">'
+            + '<button class="btn btn-sm" data-act="sel-clear" type="button">Désélectionner</button>'
+            + "</span></div>"
+            + '<div class="hd-ident">Les actions et les réglages ci-dessous portent sur '
+            + "ces " + decksSel.length + " machines."
+            + (selData.unread && selData.unread.length
+                ? " Réglages non lus sur : " + esc(selData.unread.join(", ")) + "." : "")
+            + "</div>"
+            + '<nav class="hd-tabs">'
+            + SEL_TABS.map(([k, lab]) => '<button class="hd-tab' + (k === tab ? " on" : "")
+                + '" data-tab="' + k + '" type="button">' + esc(lab) + "</button>").join("")
+            + "</nav>"
+            + '<div class="hd-tabbody">' + selTabBody(decksSel) + "</div>";
+    }
+
+    function selTabBody(decksSel) {
+        if (tab === "settings") return selSettingsHtml();
+        if (tab === "clock") return selClockHtml(decksSel);
+        return selTransportHtml(decksSel);
+    }
+
+    // Transport groupé : ce que faisait la barre, mais à sa place, et en disant sur quoi
+    // ça porte. Le libellé des boutons porte le compte — cliquer « REC » sur six machines
+    // ne doit pas ressembler à cliquer « REC » sur une.
+    function selTransportHtml(decksSel) {
+        const n = decksSel.length;
+        return '<div class="hd-sel-transport">'
+            + '<button class="btn btn-red" data-act="sel-rec" type="button">⏺ Enregistrer · '
+            + n + " machines</button>"
+            + '<button class="btn" data-act="sel-stop" type="button">⏹ Stop · ' + n + "</button>"
+            + '<button class="btn btn-green" data-act="sel-play" type="button">▶ Lecture · ' + n + "</button>"
+            + '<input type="text" id="hd-sel-name" placeholder="Nom du clip (facultatif)">'
+            + "</div>"
+            + '<table class="hd-table"><thead><tr><th>Machine</th><th>État</th><th>Timecode</th>'
+            + "<th>Slot actif</th><th>Restant</th></tr></thead><tbody>"
+            + decksSel.map((d) => {
+                const s = d.summary || {};
+                return "<tr" + (s.status === "record" ? ' class="rec"' : "") + "><td>"
+                    + esc(d.name) + "</td><td>" + statusBadge(s) + "</td>"
+                    + '<td class="hd-mono">' + esc(s.display_timecode || s.timecode || "—") + "</td>"
+                    + "<td>" + esc(s.slot_id || "—") + "</td>"
+                    + "<td>" + esc(s.recording_time_h || "—") + "</td></tr>";
+            }).join("")
+            + "</tbody></table>";
+    }
+
+    function selClockHtml(decksSel) {
+        return '<div class="hd-clock-edit">'
+            + '<label>Serveur de temps <input type="text" id="hd-sel-ntp" class="hd-mono" '
+            + 'placeholder="ntp.interne.local"></label>'
+            + '<button class="btn btn-green" data-act="sel-ntp" type="button">Appliquer aux '
+            + decksSel.length + " machines</button>"
+            + "</div>"
+            + '<table class="hd-table"><thead><tr><th>Machine</th><th>Heure</th>'
+            + "<th>Écart</th><th>Synchronisation</th><th>Serveur</th></tr></thead><tbody>"
+            + decksSel.map((d) => {
+                const r = clockRows.find((x) => x.id === d.id);
+                const c = (r && r.clock) || null;
+                if (!c || !c.available) {
+                    return "<tr><td>" + esc(d.name) + '</td><td colspan="4">'
+                        + '<span class="hd-badge">horloge indisponible</span></td></tr>';
+                }
+                const ntp = c.ntp || {};
+                const cls = ntp.ok ? "ok" : (ntp.enabled === false ? "" : "err");
+                return "<tr><td>" + esc(d.name) + "</td><td>" + fmtDeckTime(c) + "</td>"
+                    + "<td>" + driftHtml(c.drift) + "</td>"
+                    + '<td><span class="hd-badge ' + cls + '">' + esc(ntp.state_label || "—") + "</span></td>"
+                    + '<td class="hd-mono">' + esc(ntp.server || "—") + "</td></tr>";
+            }).join("")
+            + "</tbody></table>";
+    }
+
+    // Formulaire de réglages FUSIONNÉ. Un champ commun se présente exactement comme pour
+    // une machine seule ; un champ qui diverge s'affiche vide, marqué, et porte le détail
+    // (quelle valeur sur quelles machines) au survol comme au clic.
+    function selSettingsHtml() {
+        const params = selData.settings || [];
+        if (!params.length) {
+            return '<p class="hd-empty">Aucun réglage lu sur les machines sélectionnées '
+                + "(pas encore répondu, ou connexions coupées).</p>";
+        }
+        const sections = selData.sections || [];
+        let html = '<form class="hd-settings" id="hd-sel-settings">';
+        for (const sec of sections) {
+            const items = params.filter((p) => p.section === sec.key);
+            if (!items.length) continue;
+            html += "<h4>" + esc(sec.label) + "</h4><div class=\"hd-set-grid\">";
+            for (const p of items) html += selSettingRow(p);
+            html += "</div>";
+        }
+        const n = Object.keys(selDirty).length;
+        html += '<div class="hd-form-actions">'
+            + '<button class="btn btn-green" type="submit"' + (n ? "" : " disabled") + ">"
+            + (n ? "Appliquer " + n + " modification" + (n > 1 ? "s" : "") + " à "
+                + (selData.decks || []).length + " machines"
+                : "Aucune modification")
+            + "</button>"
+            + '<span class="hd-hint-inline">Seuls les champs que vous touchez sont écrits : '
+            + "les autres restent tels quels sur chaque machine.</span>"
+            + "</div></form>";
+        return html;
+    }
+
+    function selSettingRow(p) {
+        const id = "hd-ss-" + p.key.replace(/[^a-z0-9]+/gi, "-");
+        const dirty = Object.prototype.hasOwnProperty.call(selDirty, p.key);
+        const val = dirty ? selDirty[p.key] : (p.same ? p.value : "");
+        // Le détail des divergences, lisible au survol : valeur puis machines concernées.
+        const detailTxt = (p.values || []).map((v) => v.value + " — " + v.decks.join(", ")).join("\n");
+        let control;
+        if (p.type === "bool") {
+            // Une case à cocher ne sait pas dire « ça dépend » : en cas de divergence on
+            // passe par une liste à trois états, dont l'état neutre « ne pas toucher ».
+            const cur = dirty ? String(selDirty[p.key]) : (p.same ? String(p.value) : "");
+            control = '<select id="' + id + '" data-sskey="' + esc(p.key) + '" data-sstype="bool">'
+                + (p.same ? "" : '<option value=""' + (cur === "" ? " selected" : "") + ">— valeurs différentes —</option>")
+                + '<option value="true"' + (cur === "true" ? " selected" : "") + ">activé</option>"
+                + '<option value="false"' + (cur === "false" ? " selected" : "") + ">désactivé</option>"
+                + "</select>";
+        } else if (p.type === "enum" && (p.choices || []).length) {
+            control = '<select id="' + id + '" data-sskey="' + esc(p.key) + '" data-sstype="enum">'
+                + (p.same ? "" : '<option value=""' + (dirty ? "" : " selected") + ">— valeurs différentes —</option>")
+                + p.choices.map((c) => '<option value="' + esc(c) + '"'
+                    + (String(c) === String(val) ? " selected" : "") + ">" + esc(c) + "</option>").join("")
+                + "</select>";
+        } else {
+            control = '<input type="' + (p.type === "number" ? "number" : "text") + '" id="' + id
+                + '" data-sskey="' + esc(p.key) + '" data-sstype="' + esc(p.type) + '"'
+                + ' value="' + esc(val) + '"'
+                + (p.same ? (p.placeholder ? ' placeholder="' + esc(p.placeholder) + '"' : "")
+                    : ' placeholder="— valeurs différentes —"') + ">";
+        }
+        const flag = p.same
+            ? ""
+            : '<button type="button" class="hd-diff" data-diff="' + esc(p.key) + '" title="'
+                + esc(detailTxt) + '">⚠ ' + (p.values || []).length + " valeurs</button>";
+        // Un réglage absent de certaines machines (modèles différents) : on le dit aussi,
+        // c'est une divergence d'une autre nature qu'une valeur qui diffère.
+        const partial = p.present < p.total
+            ? '<span class="hd-tag" title="Réglage absent des autres machines">'
+                + p.present + "/" + p.total + "</span>" : "";
+        return '<label for="' + id + '">' + esc(p.label)
+            + (p.unknown ? ' <span class="hd-tag">clé brute</span>' : "")
+            + (p.note ? '<span class="hd-note">' + esc(p.note) + "</span>" : "")
+            + "</label><span class=\"hd-sel-cell" + (dirty ? " dirty" : "") + "\">"
+            + control + flag + partial + "</span>";
     }
 
     function connBanner(st, s) {
@@ -502,6 +690,65 @@ window.BTTools.hyperdeck = (function () {
 
     function row(label, value) {
         return "<tr><td>" + esc(label) + "</td><td>" + value + "</td></tr>";
+    }
+
+    // ── Interactions du panneau de sélection ─────────────────
+
+    async function selTransport(action, extra) {
+        const n = selected.size;
+        const verb = action === "record" ? "Enregistrer" : action === "stop" ? "Arrêter" : "Lire";
+        if (!window.confirm(verb + " sur " + n + " machine" + (n > 1 ? "s" : "") + " ?")) return;
+        await runBulk(Object.assign({ action, ids: Array.from(selected) }, extra || {}));
+        loadSelection(true);
+    }
+
+    async function selNtp() {
+        const el = $("#hd-sel-ntp");
+        const server = el ? el.value.trim() : "";
+        if (!server) { toast("Indiquez le serveur de temps à appliquer", "error"); return; }
+        if (!window.confirm("Appliquer le serveur de temps « " + server + " » sur "
+            + selected.size + " machine(s) ?")) return;
+        await runBulk({ action: "clock", ids: Array.from(selected), server, enabled: true });
+        await loadClockAll(true);
+        renderSelection(true);
+    }
+
+    // Le détail d'une divergence, en clair : quelle valeur, sur quelles machines. Le
+    // survol le donne déjà ; le clic sert quand la liste est longue ou sur tactile.
+    function showDiff(key) {
+        const p = (selData.settings || []).find((x) => x.key === key);
+        if (!p) return;
+        const txt = (p.values || [])
+            .map((v) => "• " + v.value + "  →  " + v.decks.join(", ")).join("\n");
+        window.alert(p.label + "\n\n" + txt);
+    }
+
+    function onSelSettingsChange(e) {
+        const el = e.target;
+        if (!el || !el.dataset || !el.dataset.sskey) return;
+        const key = el.dataset.sskey;
+        const p = (selData.settings || []).find((x) => x.key === key);
+        // Revenir à « — valeurs différentes — » retire la modification : c'est le moyen de
+        // dire « finalement, ne touche pas à ce champ ».
+        if (el.value === "" && p && !p.same) delete selDirty[key];
+        else selDirty[key] = el.dataset.sstype === "number" ? Number(el.value) : el.value;
+        renderSelection(true);
+    }
+
+    async function onSelSettingsSubmit(e) {
+        e.preventDefault();
+        const values = {};
+        for (const k of Object.keys(selDirty)) {
+            const p = (selData.settings || []).find((x) => x.key === k);
+            values[k] = p && p.type === "bool" ? (String(selDirty[k]) === "true") : selDirty[k];
+        }
+        if (!Object.keys(values).length) return;
+        const n = (selData.decks || []).length;
+        const lignes = Object.entries(values).map(([k, v]) => "  • " + k + " : " + v).join("\n");
+        if (!window.confirm("Appliquer à " + n + " machines :\n" + lignes)) return;
+        await runBulk({ action: "settings", ids: Array.from(selected), values });
+        selDirty = {};
+        loadSelection(true);
     }
 
     async function loadClockOne() {
@@ -898,6 +1145,16 @@ window.BTTools.hyperdeck = (function () {
         const act = t.dataset.act;
         if (act === "clock-refresh") return loadClockOne();
         if (act === "ntp-save") return saveNtp();
+        // Actions du panneau de sélection
+        if (act === "sel-clear") { selected.clear(); selData = null; selDirty = {}; renderCards(); return renderDetail(true); }
+        if (act === "sel-rec") {
+            const el = $("#hd-sel-name");
+            return selTransport("record", { name: el ? el.value.trim() : "" });
+        }
+        if (act === "sel-stop") return selTransport("stop", {});
+        if (act === "sel-play") return selTransport("play", {});
+        if (act === "sel-ntp") return selNtp();
+        if (t.dataset.diff) return showDiff(t.dataset.diff);
         if (act === "reconnect") return doReconnect();
         if (act === "identify") return transport("identify", { enable: true });
         if (act === "remote-on") return transport("remote", { enable: true });
@@ -973,6 +1230,7 @@ window.BTTools.hyperdeck = (function () {
     function onDetailChange(e) {
         const el = e.target;
         if (!el || !el.dataset) return;
+        if (el.dataset.sskey) return onSelSettingsChange(e);
         if (el.dataset.skey || el.dataset.xlr) {
             settingsDirty = true;
             const s = $("#hd-set-state");
@@ -986,6 +1244,7 @@ window.BTTools.hyperdeck = (function () {
         if (e && e.preventDefault) e.preventDefault();
         const id = e.target && e.target.id;
         if (id === "hd-settings") return applySettings();
+        if (id === "hd-sel-settings") return onSelSettingsSubmit(e);
         if (id === "hd-console-form") return sendConsole();
     }
 
@@ -1109,41 +1368,6 @@ window.BTTools.hyperdeck = (function () {
     }
 
     // ── Actions groupées ─────────────────────────────────────
-    async function bulkTransport(action) {
-        if (!selected.size) return;
-        const body = { action, ids: Array.from(selected) };
-        if (action === "record") {
-            const el = $("#hd-bulk-name");
-            const n = el ? el.value.trim() : "";
-            if (n) body.name = n;
-        }
-        await runBulk(body);
-    }
-
-    async function bulkSettings() {
-        if (!selected.size) return;
-        const key = $("#hd-bulk-key").value;
-        const value = $("#hd-bulk-value").value.trim();
-        if (!key || !value) { toast("Réglage et valeur requis", "error"); return; }
-        if (!window.confirm("Appliquer « " + key + " : " + value + " » sur "
-            + selected.size + " machine(s) ?")) return;
-        await runBulk({ action: "settings", ids: Array.from(selected), values: { [key]: value } });
-    }
-
-    // Poser le même serveur de temps sur tout un parc. C'est le geste qui répare une
-    // dérive : un enregistreur mal synchronisé date mal ses fichiers, et rien dans les
-    // écrans de transport ne le laisse voir.
-    async function bulkNtp() {
-        if (!selected.size) return;
-        const server = $("#hd-bulk-ntp").value.trim();
-        if (!server) { toast("Indiquez le serveur de temps à appliquer", "error"); return; }
-        if (!window.confirm("Appliquer le serveur de temps « " + server + " » sur "
-            + selected.size + " machine(s) ?")) return;
-        await runBulk({ action: "clock", ids: Array.from(selected), server, enabled: true });
-        await loadClockAll(true);
-        if (view === "overview") loadOverview();
-    }
-
     async function runBulk(body) {
         try {
             const data = await ctx.api("bulk", { body });

@@ -85,23 +85,11 @@
       </div>
     </div>
 
-    <!-- Barre d'actions groupées : n'apparaît qu'avec une sélection. C'est la raison
-         d'être de l'outil en direct — lancer six machines ensemble. -->
-    <div class="hd-bulk" id="hd-bulk" hidden>
-      <span class="hd-bulk-n" id="hd-bulk-n"></span>
-      <button class="btn btn-red" id="hd-bulk-rec" type="button" data-i18n="plugin.hyperdeck.bulk.rec">⏺ Enregistrer</button>
-      <button class="btn" id="hd-bulk-stop" type="button" data-i18n="plugin.hyperdeck.bulk.stop">⏹ Stop</button>
-      <button class="btn btn-green" id="hd-bulk-play" type="button" data-i18n="plugin.hyperdeck.bulk.play">▶ Lecture</button>
-      <input type="text" id="hd-bulk-name" placeholder="Nom du clip (facultatif)">
-      <span class="hd-spacer"></span>
-      <select id="hd-bulk-key"></select>
-      <input type="text" id="hd-bulk-value" placeholder="Valeur">
-      <button class="btn" id="hd-bulk-apply" type="button" data-i18n="plugin.hyperdeck.bulk.apply">Appliquer le réglage</button>
-      <input type="text" id="hd-bulk-ntp" class="hd-mono" placeholder="Serveur de temps (NTP)">
-      <button class="btn" id="hd-bulk-ntp-apply" type="button"
-              data-i18n="plugin.hyperdeck.bulk.ntp">Appliquer le NTP</button>
-      <button class="btn" id="hd-bulk-clear" type="button" data-i18n="plugin.hyperdeck.bulk.clear">Désélectionner</button>
-    </div>
+    <!-- Pas de barre d'actions groupées. Dès que deux machines sont cochées, le panneau
+         de détail devient celui de la SÉLECTION : mêmes onglets, mêmes champs, avec les
+         divergences signalées champ par champ. Une action groupée se fait donc là où l'on
+         regarde déjà, au lieu d'une barre séparée qui doublait l'écran. -->
+
     <div class="hd-report" id="hd-report" hidden></div>
   </div>
 

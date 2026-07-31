@@ -155,14 +155,22 @@
   margin: 4px 0 0; white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; }
 .hd-cons-out.err { border-color: var(--status-stopped-fg); color: var(--status-stopped-fg); }
 
-/* Barre d'actions groupées : collée en bas, elle reste atteignable en faisant défiler
-   un long parc. */
-.hd-bulk { position: sticky; bottom: 0; z-index: 2; display: flex; gap: 8px; align-items: center;
-  flex-wrap: wrap; background: var(--bg-elev); border: 1px solid var(--accent);
-  border-radius: var(--radius); padding: 10px 12px; }
-.hd-bulk[hidden] { display: none; }
-.hd-bulk-n { font-size: 12px; color: var(--text-muted); }
-.hd-bulk input[type="text"] { width: 200px; }
+/* Panneau de SÉLECTION (remplace l'ancienne barre d'actions groupées).
+   Ce qui distingue « j'agis sur six machines » de « j'agis sur une » est porté par le
+   badge de tête et par le libellé des boutons, qui comptent les machines — pas par un
+   décor : un compte écrit se lit, une couleur s'interprète. */
+.hd-sel-transport { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  margin-bottom: 12px; }
+.hd-sel-transport input[type="text"] { width: 220px; }
+
+/* Champ d'un formulaire fusionné. « dirty » = valeur saisie qui SERA écrite sur toutes
+   les machines : elle se distingue de celles qu'on ne fait que consulter. */
+.hd-sel-cell { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.hd-sel-cell.dirty select, .hd-sel-cell.dirty input {
+  border-color: var(--accent); background: var(--accent-soft); }
+.hd-diff { background: none; border: 0; padding: 0; cursor: help; font-size: 11px;
+  color: var(--status-warning-fg); white-space: nowrap; }
+.hd-diff:hover { text-decoration: underline; }
 
 .hd-report { border: 1px solid var(--border); background: var(--bg-elev);
   border-radius: var(--radius); padding: 12px; }

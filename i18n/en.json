@@ -35,11 +35,6 @@
   "plugin.hyperdeck.retrying": "Retrying automatically.",
   "plugin.hyperdeck.remoteOff": "Remote control is disabled on the deck: transport commands will be rejected.",
   "plugin.hyperdeck.connPermanent": "permanent connections · full re-read every ",
-  "plugin.hyperdeck.bulk.rec": "⏺ Record",
-  "plugin.hyperdeck.bulk.stop": "⏹ Stop",
-  "plugin.hyperdeck.bulk.play": "▶ Play",
-  "plugin.hyperdeck.bulk.apply": "Apply setting",
-  "plugin.hyperdeck.bulk.clear": "Clear selection",
   "plugin.hyperdeck.view.nas": "Network volumes",
   "plugin.hyperdeck.nas.lib": "Tool's network paths",
   "plugin.hyperdeck.nas.add": "+ Add a path",
@@ -62,5 +57,5 @@
   "plugin.hyperdeck.nas.saved": "Path saved",
   "plugin.hyperdeck.nas.pwHint": "Without a username, the HyperDeck connects as guest.",
   "plugin.hyperdeck.nas.confirmDel": "Remove this path from the tool's library?\nBookmarks already stored on the decks are left untouched.",
-  "plugin.hyperdeck.bulk.ntp": "Apply NTP server"
+  "plugin.hyperdeck.sel.settings": "Settings apply to the whole selection"
 }

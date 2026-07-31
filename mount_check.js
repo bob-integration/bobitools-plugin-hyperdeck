@@ -41,9 +41,14 @@ function makeEl(desc) {
     };
     return el;
 }
+// Les éléments sont MÉMORISÉS par sélecteur : sans ça, chaque `$("#hd-detail")` rendrait
+// un objet neuf et on ne pourrait pas relire ce que le code vient d'y écrire — or c'est
+// exactement ce qu'on veut vérifier pour un rendu conditionnel.
+const cache = new Map();
 function query(sel) {
-    if (sel.startsWith("#")) return ids.has(sel.slice(1)) ? makeEl(sel) : null;
-    return makeEl(sel);
+    if (sel.startsWith("#") && !ids.has(sel.slice(1))) return null;
+    if (!cache.has(sel)) cache.set(sel, makeEl(sel));
+    return cache.get(sel);
 }
 function queryAll(sel) {
     // Deux éléments : assez pour exercer les boucles sans exploser la sortie.
@@ -91,9 +96,17 @@ const STATE = {
 const shapes = {
     config: { refresh_interval: 20, live_timecode: true, default_port: 9993,
               sections: [{ key: "inputs", label: "Entrées" }, { key: "record", label: "Enregistrement" }] },
+    // Trois machines : la sélection multiple doit pouvoir en cocher deux et survivre au
+    // rafraîchissement du parc, qui écarte de la sélection les machines disparues.
     decks: { decks: [{ id: "a1", name: "Deck 1", host: "10.0.0.1", port: 9993, enabled: true,
                        group: "Régie", notes: "", user: "", has_password: false,
-                       summary: SUMMARY }], groups: ["Régie"] },
+                       summary: SUMMARY },
+                     { id: "a2", name: "Deck 2", host: "10.0.0.2", port: 9993, enabled: true,
+                       group: "Régie", notes: "", user: "", has_password: false,
+                       summary: SUMMARY },
+                     { id: "a3", name: "Deck 3", host: "10.0.0.3", port: 9993, enabled: true,
+                       group: "Car", notes: "", user: "", has_password: false,
+                       summary: { connected: false } }], groups: ["Régie", "Car"] },
     overview: { rows: [{ id: "a1", name: "Deck 1", host: "10.0.0.1", group: "Régie",
                          enabled: true, summary: SUMMARY,
                          slots: [{ slot_id: "1", status: "mounted", recording_time_h: "2 h 14" }] }] },
@@ -106,6 +119,37 @@ const shapes = {
                      choices: [], section: "record", order: 40, value: "false" }],
         sections: [{ key: "inputs", label: "Entrées" }, { key: "record", label: "Enregistrement" }],
     },
+    // Sélection multiple : deux champs communs, deux qui divergent, une machine dont les
+    // réglages n'ont pas été lus. C'est la forme que doit savoir rendre le panneau.
+    selection: {
+        decks: [
+            { id: "a1", name: "Deck 1", connected: true, summary: SUMMARY },
+            { id: "a2", name: "Deck 2", connected: true, summary: SUMMARY },
+            { id: "a3", name: "Deck 3", connected: false, summary: { connected: false } },
+        ],
+        settings: [
+            { key: "video input", label: "Entrée vidéo", type: "enum", choices: ["SDI", "HDMI"],
+              section: "inputs", order: 10, same: true, value: "SDI", present: 2, total: 2,
+              values: [{ value: "SDI", decks: ["Deck 1", "Deck 2"], count: 2 }] },
+            { key: "file format", label: "Format de fichier", type: "enum",
+              choices: ["QuickTimeProResHQ", "H.264High"], section: "record", order: 10,
+              same: false, value: null, present: 2, total: 2,
+              values: [{ value: "QuickTimeProResHQ", decks: ["Deck 1"], count: 1 },
+                       { value: "H.264High", decks: ["Deck 2"], count: 1 }] },
+            { key: "append timestamp", label: "Horodatage", type: "bool", choices: [],
+              section: "record", order: 40, same: false, value: null, present: 2, total: 2,
+              values: [{ value: "true", decks: ["Deck 1"], count: 1 },
+                       { value: "false", decks: ["Deck 2"], count: 1 }] },
+            { key: "record prefix", label: "Préfixe", type: "text", choices: [],
+              section: "record", order: 20, same: true, value: "REGIE", present: 1, total: 2,
+              values: [{ value: "REGIE", decks: ["Deck 1"], count: 1 }] },
+        ],
+        sections: [{ key: "inputs", label: "Entrées" }, { key: "record", label: "Enregistrement" }],
+        unread: ["Deck 3"],
+    },
+    clock: { rows: [{ id: "a1", name: "Deck 1", clock: { available: true, epoch: 1785508625,
+             tz_offset_min: 0, drift: -0.4, ntp: { enabled: true, server: "ntp.local",
+             state: "Synchronized", state_label: "synchronisé", ok: true } } }], server_time: 1785508625 },
     export: { decks: [], nas: [] },
     nas: { paths: [{ id: "n1", label: "Rushes", url: "smb://10.0.0.9/Rushes",
                      username: "user", has_password: true, notes: "" }] },
@@ -150,7 +194,53 @@ setTimeout(() => {
     }
     console.log((ko ? "✗ " : "✓ ") + handlers.length + " gestionnaires rejoués · " + ko + " en erreur");
 
-    try { tool.unmount(); console.log("✓ unmount() sans erreur"); }
-    catch (e) { console.error("✗ unmount() a levé :", e.message); failed = true; }
-    process.exit(failed ? 1 : 0);
+    // ── Panneau de SÉLECTION ────────────────────────────────
+    // Il ne s'affiche qu'à partir de deux machines cochées : le rejeu générique ci-dessus
+    // ne l'atteint jamais (ses faux événements n'ont pas de `dataset.pick`). On coche donc
+    // explicitement deux machines, puis on lit ce qui a été rendu dans #hd-detail.
+    const cardsHandlers = handlers.filter((h) => h.desc === "#hd-cards" && h.ev === "click");
+    for (const id of ["a1", "a2"]) {
+        const target = makeEl("case");
+        target.dataset.pick = id;
+        target.checked = true;
+        for (const h of cardsHandlers) {
+            try { h.fn({ target, preventDefault: () => {}, stopPropagation: () => {} }); }
+            catch (e) { console.error("✗ sélection de " + id + " → " + e.message); failed = true; }
+        }
+    }
+
+    // Le panneau s'ouvre sur Transport : on bascule sur Réglages, qui est l'écran visé
+    // par l'édition multiple. `closest()` doit se renvoyer lui-même — c'est ainsi que la
+    // délégation d'événements retrouve l'onglet cliqué.
+    setTimeout(() => {
+        const tabEl = makeEl("onglet");
+        tabEl.dataset.tab = "settings";
+        tabEl.closest = () => tabEl;
+        for (const h of handlers.filter((h) => h.desc === "#hd-detail" && h.ev === "click")) {
+            try { h.fn({ target: tabEl, preventDefault: () => {}, stopPropagation: () => {} }); }
+            catch (e) { console.error("✗ ouverture de l'onglet Réglages → " + e.message); failed = true; }
+        }
+    }, 120);
+
+    setTimeout(() => {
+        const html = String((cache.get("#hd-detail") || {}).innerHTML || "");
+        // DEBUG_SEL=1 pour voir ce qui a réellement été rendu quand un contrôle échoue.
+        if (process.env.DEBUG_SEL) console.log("--- #hd-detail ---\n" + html.slice(0, 700) + "\n---");
+        const checks = [
+            ["le panneau annonce le nombre de machines", /3 machines/.test(html)],
+            ["les champs divergents sont signalés", /valeurs diff/.test(html)],
+            ["le détail d'une divergence est proposé", /data-diff=/.test(html)],
+            ["un champ commun garde sa valeur", /SDI/.test(html)],
+            ["les machines hors ligne sont comptées", /hors ligne/.test(html)],
+            ["les réglages non lus sont dits", /Deck 3/.test(html)],
+        ];
+        for (const [label, cond] of checks) {
+            if (cond) console.log("✓ " + label);
+            else { console.error("✗ " + label); failed = true; }
+        }
+
+        try { tool.unmount(); console.log("✓ unmount() sans erreur"); }
+        catch (e) { console.error("✗ unmount() a levé :", e.message); failed = true; }
+        process.exit(failed ? 1 : 0);
+    }, 320);
 }, 300);
