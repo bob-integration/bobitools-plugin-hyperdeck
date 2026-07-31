@@ -159,6 +159,52 @@ Si la machine est en mode sécurisé, renseignez identifiant et mot de passe dan
 L'authentification est transparente : à la première réponse `122 authentication required`,
 l'outil s'authentifie puis rejoue la commande.
 
+## Horloge et NTP
+
+L'onglet **Horloge** d'une machine montre l'heure **telle que l'appareil la voit** — donc
+telle qu'il **datera ses fichiers** —, l'écart avec l'heure du serveur, le fuseau réglé sur
+la machine, l'état de synchronisation et le serveur de temps. Le serveur NTP se modifie
+ici, machine par machine, ou d'un coup sur une sélection depuis la barre d'actions
+groupées (champ *Serveur de temps*).
+
+La vue d'ensemble porte une colonne **Horloge**, volontairement distincte du **Timecode** :
+le timecode est une donnée de montage, l'horloge date les fichiers. Les confondre fait
+chercher une dérive au mauvais endroit.
+
+> **Le cas à connaître :** une machine peut afficher une heure parfaitement juste avec une
+> synchronisation **en échec**. Elle a été mise à l'heure un jour et n'a pas encore dérivé
+> — mais elle dérivera, et personne ne le verra avant que les fichiers ne soient mal datés.
+> C'est exactement l'état de la machine sur laquelle cette fonction a été mise au point :
+> heure exacte à 0,1 s près, NTP en échec depuis longtemps. D'où l'affichage systématique
+> des **deux** faits, jamais l'un sans l'autre.
+
+L'écart affiché ne dépend d'aucun fuseau : on compare deux dates absolues. Le fuseau ne
+sert qu'à afficher l'heure locale de la machine. Une machine dont l'accès web est coupé
+(réglage *Accès réseau* de l'appareil) est signalée **indisponible** — jamais supposée à
+l'heure.
+
+Enfin, la machine **accepte n'importe quelle adresse de serveur** sans la vérifier : un nom
+qui ne résout pas est enregistré sans broncher. C'est l'état relu juste après l'écriture
+qui dit si elle y arrive, et c'est lui que l'outil affiche.
+
+### D'où vient cette fonction
+
+Le HyperDeck Ethernet Protocol (TCP 9993) **ignore totalement l'horloge** : sur un Studio
+4K Pro en firmware 9.0.2, `clock`, `time`, `date` et `ntp` répondent tous
+`100 syntax error`, et aucune des **135 commandes** que la machine déclare elle-même ne
+touche à l'heure. L'API REST de contrôle (`/control/api/v1`, **70 points d'entrée** décrits
+par l'appareil) ne la connaît pas davantage.
+
+L'horloge vit dans une **troisième interface**, servie sur le port 80 sous
+`/admin/api/v1/` : celle de l'utilitaire *Blackmagic HyperDeck Setup*. Blackmagic ne la
+documente nulle part ; `admin.py` a été écrit d'après l'observation du dialogue réel entre
+Setup et une machine. Les formats sont donc **relevés, pas supposés** — et sans garantie de
+stabilité d'un firmware à l'autre, d'où la tolérance systématique aux champs manquants.
+
+Cette API ne demande **aucune authentification** alors qu'elle règle aussi le réseau, les
+accès et les comptes. L'outil s'en tient délibérément à l'horloge : une écriture malheureuse
+sur l'interface réseau couperait la machine du réseau.
+
 ## Ce qui n'est pas (encore) là
 
 - **formatage des supports** (`format: prepare` / `format: confirm`) — destructif, laissé

@@ -36,6 +36,10 @@ window.BTTools.hyperdeck = (function () {
     let nasMatrix = { paths: [], decks: [], cells: {} };
     let nasTargets = new Set();        // machines cochées dans la vue Volumes réseau
     let nasEditing = null;
+    // Horloge : lue à part (API d'administration HTTP), donc jamais servie par le cache
+    // de notifications. `null` = pas encore lue, à distinguer d'une lecture en échec.
+    let clockOne = null;               // horloge de la machine du détail
+    let clockRows = [];                // horloge de tout le parc (vue d'ensemble)
 
     // États d'un croisement (chemin, machine). Quatre faits DISTINCTS : un signet n'est
     // pas un montage, et un partage « sélectionné » dont le serveur ne répond pas n'est
@@ -90,6 +94,7 @@ window.BTTools.hyperdeck = (function () {
         $("#hd-bulk-stop").addEventListener("click", () => bulkTransport("stop"));
         $("#hd-bulk-play").addEventListener("click", () => bulkTransport("play"));
         $("#hd-bulk-apply").addEventListener("click", bulkSettings);
+        $("#hd-bulk-ntp-apply").addEventListener("click", bulkNtp);
         $("#hd-ov-refresh").addEventListener("click", loadOverview);
         $("#hd-nas-add").addEventListener("click", () => showNasForm(null));
         $("#hd-nas-form").addEventListener("submit", onNasFormSubmit);
@@ -184,6 +189,10 @@ window.BTTools.hyperdeck = (function () {
     async function loadOverview() {
         try {
             const data = await ctx.api("overview");
+            // L'horloge vient d'une autre interface que l'état : deux appels, mais le
+            // second tape un cache côté serveur (TTL), donc afficher la vue d'ensemble en
+            // boucle n'interroge pas le parc en boucle.
+            await loadClockAll(false);
             renderOverview(data.rows || []);
         } catch (e) {
             $("#hd-ov").innerHTML = '<p class="hd-empty">' + esc(e.message) + "</p>";
@@ -394,7 +403,8 @@ window.BTTools.hyperdeck = (function () {
         const d = detail.deck, st = detail.state || {}, s = d.summary || {};
         const dev = st.device || {};
         const tabs = [["transport", "Transport"], ["settings", "Réglages"], ["media", "Médias"],
-            ["network", "Réseau"], ["events", "Événements"], ["console", "Console"]];
+            ["network", "Réseau"], ["clock", "Horloge"], ["events", "Événements"],
+            ["console", "Console"]];
         host.innerHTML =
             '<div class="hd-detail-h">'
             + '<span class="hd-dot ' + (s.connected ? "ok" : "err") + '"></span>'
@@ -445,9 +455,150 @@ window.BTTools.hyperdeck = (function () {
         if (tab === "settings") return settingsHtml(st);
         if (tab === "media") return mediaHtml(st);
         if (tab === "network") return networkHtml(st);
+        if (tab === "clock") return clockHtml();
         if (tab === "events") return eventsHtml(st);
         if (tab === "console") return consoleHtml(st);
         return transportHtml(st, s);
+    }
+
+    // ── Onglet Horloge (une machine) ─────────────────────────
+    // L'heure et le NTP ne viennent PAS du protocole Ethernet, qui les ignore, mais de
+    // l'API d'administration de la machine (HTTP). Deux faits distincts sont montrés
+    // séparément, parce qu'ils ne disent pas la même chose : l'heure actuelle peut être
+    // juste alors que la synchronisation est en échec — la machine a été mise à l'heure
+    // un jour et n'a pas encore dérivé. C'est ce cas-là qu'on veut voir venir.
+    function clockHtml() {
+        const c = clockOne;
+        if (c === null) return '<p class="hd-empty">Lecture de l\'horloge…</p>';
+        if (!c.available) {
+            return '<div class="hd-banner err">Horloge illisible : ' + esc(c.error || "—")
+                + '</div><p class="hd-empty">Cette machine ne répond pas sur son interface '
+                + "d'administration (HTTP). Vérifiez que l'accès web n'est pas désactivé "
+                + "dans ses réglages réseau, ou que le firmware est assez récent.</p>";
+        }
+        const ntp = c.ntp || {};
+        const cls = ntp.ok ? "ok" : (ntp.enabled === false ? "" : "err");
+        return '<table class="hd-table"><tbody>'
+            + row("Heure de la machine", fmtDeckTime(c))
+            + row("Écart avec le serveur", driftHtml(c.drift))
+            + row("Fuseau réglé sur la machine", tzLabel(c.tz_offset_min))
+            + row("Synchronisation (NTP)", '<span class="hd-badge ' + cls + '">'
+                + esc(ntp.state_label || "—") + "</span>")
+            + row("Serveur de temps", '<span class="hd-mono">' + esc(ntp.server || "—") + "</span>")
+            + "</tbody></table>"
+            + '<div class="hd-clock-edit">'
+            + '<label>Serveur de temps <input type="text" id="hd-ntp-server" class="hd-mono" '
+            + 'value="' + esc(ntp.server || "") + '" placeholder="time.cloudflare.com"></label>'
+            + '<label class="hd-inline"><input type="checkbox" id="hd-ntp-enabled"'
+            + (ntp.enabled ? " checked" : "") + "> Synchroniser automatiquement</label>"
+            + '<button class="btn btn-green" data-act="ntp-save" type="button">Appliquer</button>'
+            + '<button class="btn btn-sm" data-act="clock-refresh" type="button">Relire</button>'
+            + "</div>"
+            + '<p class="hd-hint">La machine accepte n\'importe quelle adresse sans la '
+            + "vérifier : c'est l'état de synchronisation, relu juste après, qui dit si "
+            + "elle y arrive. Une horloge non synchronisée dérive, et c'est elle qui date "
+            + "les fichiers enregistrés.</p>";
+    }
+
+    function row(label, value) {
+        return "<tr><td>" + esc(label) + "</td><td>" + value + "</td></tr>";
+    }
+
+    async function loadClockOne() {
+        if (!selId) return;
+        clockOne = null;
+        renderDetail(true);
+        try {
+            const d = await ctx.api("decks/" + selId + "/clock");
+            clockOne = d.clock || { available: false, error: "réponse vide" };
+        } catch (e) {
+            clockOne = { available: false, error: e.message };
+        }
+        renderDetail(true);
+    }
+
+    async function saveNtp() {
+        const el = $("#hd-ntp-server"), en = $("#hd-ntp-enabled");
+        const server = el ? el.value.trim() : "";
+        const enabled = en ? en.checked : false;
+        if (enabled && !server) { ctx.toast("Indiquez l'adresse du serveur de temps", "warning"); return; }
+        try {
+            const d = await ctx.api("decks/" + selId + "/clock", { body: { server, enabled } });
+            clockOne = d.clock || clockOne;
+            const st = (d.ntp || {});
+            // On rend compte de l'état RÉEL, pas d'un « enregistré » qui laisserait croire
+            // que la synchronisation fonctionne : la machine accepte toute adresse.
+            ctx.toast(st.ok ? "Serveur de temps appliqué — " + (st.state_label || "")
+                : "Enregistré, mais la synchronisation n'aboutit pas (" + (st.state_label || "?") + ")",
+                st.ok ? "info" : "warning");
+            renderDetail(true);
+        } catch (e) { ctx.toast(e.message, "error"); }
+    }
+
+    // Cellule « Horloge » de la vue d'ensemble : l'heure de la machine, et l'état de
+    // synchronisation en dessous. Une heure juste avec un NTP en échec reste signalée —
+    // c'est l'avertissement utile, celui qui précède la dérive.
+    function clockCell(deckId) {
+        const r = clockRows.find((x) => x.id === deckId);
+        if (!r || !r.clock) return '<span class="hd-empty-cell">—</span>';
+        const c = r.clock;
+        if (!c.available) {
+            return '<span class="hd-badge" title="' + esc(c.error || "") + '">indisponible</span>';
+        }
+        const ntp = c.ntp || {};
+        const cls = ntp.ok ? "ok" : (ntp.enabled === false ? "" : "err");
+        return fmtDeckTime(c) + "<br>" + driftBadge(c.drift)
+            + ' <span class="hd-badge ' + cls + '" title="Serveur : '
+            + esc(ntp.server || "—") + '">' + esc(ntp.state_label || "?") + "</span>";
+    }
+
+    function driftBadge(drift) {
+        if (drift === null || drift === undefined) return "";
+        const a = Math.abs(drift);
+        if (a <= 2) return "";                 // écart normal : on n'encombre pas la ligne
+        const cls = a <= 60 ? "warn" : "err";
+        const txt = a < 90 ? Math.round(drift) + " s"
+            : a < 5400 ? (drift / 60).toFixed(1) + " min" : (drift / 3600).toFixed(1) + " h";
+        return '<span class="hd-badge ' + cls + '" title="Écart avec l\'heure du serveur">'
+            + (drift > 0 ? "+" : "") + esc(txt) + "</span>";
+    }
+
+    async function loadClockAll(force) {
+        try {
+            const d = await ctx.api("clock" + (force ? "?refresh=1" : ""));
+            clockRows = d.rows || [];
+        } catch (e) { clockRows = []; }
+    }
+
+    // L'heure telle que LA MACHINE la voit : epoch absolu ramené dans le fuseau qu'elle
+    // déclare. C'est cette heure-là qui datera ses fichiers, pas celle du navigateur.
+    function fmtDeckTime(c) {
+        if (!c.epoch) return "—";
+        const d = new Date((c.epoch - (c.tz_offset_min || 0) * 60) * 1000);
+        const p = (n) => String(n).padStart(2, "0");
+        return '<span class="hd-mono">' + d.getUTCFullYear() + "-" + p(d.getUTCMonth() + 1)
+            + "-" + p(d.getUTCDate()) + " " + p(d.getUTCHours()) + ":" + p(d.getUTCMinutes())
+            + ":" + p(d.getUTCSeconds()) + "</span>";
+    }
+
+    function tzLabel(min) {
+        if (min === null || min === undefined) return "—";
+        if (min === 0) return "UTC";
+        // Convention JavaScript : minutes À L'OUEST de UTC. −120 ⇒ UTC+2.
+        const east = -min, h = Math.trunc(east / 60), m = Math.abs(east % 60);
+        return "UTC" + (east >= 0 ? "+" : "−") + Math.abs(h) + (m ? ":" + String(m).padStart(2, "0") : "");
+    }
+
+    function driftHtml(drift) {
+        if (drift === null || drift === undefined) return "—";
+        const a = Math.abs(drift);
+        const cls = a <= 2 ? "ok" : a <= 60 ? "warn" : "err";
+        const txt = a < 90 ? Math.round(drift) + " s"
+            : a < 5400 ? (drift / 60).toFixed(1) + " min"
+                : (drift / 3600).toFixed(1) + " h";
+        return '<span class="hd-badge ' + cls + '">' + (drift > 0 ? "+" : "") + esc(txt) + "</span>"
+            + (a > 2 ? ' <span class="hd-hint-inline">la machine est '
+                + (drift > 0 ? "en avance" : "en retard") + " sur le serveur</span>" : "");
     }
 
     // ── Onglet Réseau (une machine) ──────────────────────────
@@ -738,9 +889,15 @@ window.BTTools.hyperdeck = (function () {
             tab = t.dataset.tab;
             settingsDirty = false;
             renderDetail(true);
+            // L'horloge n'arrive pas avec l'état : il faut aller la chercher, et le faire
+            // seulement quand on ouvre l'onglet — inutile d'interroger l'API
+            // d'administration de chaque machine qu'on ne fait que survoler.
+            if (tab === "clock") loadClockOne();
             return;
         }
         const act = t.dataset.act;
+        if (act === "clock-refresh") return loadClockOne();
+        if (act === "ntp-save") return saveNtp();
         if (act === "reconnect") return doReconnect();
         if (act === "identify") return transport("identify", { enable: true });
         if (act === "remote-on") return transport("remote", { enable: true });
@@ -973,6 +1130,20 @@ window.BTTools.hyperdeck = (function () {
         await runBulk({ action: "settings", ids: Array.from(selected), values: { [key]: value } });
     }
 
+    // Poser le même serveur de temps sur tout un parc. C'est le geste qui répare une
+    // dérive : un enregistreur mal synchronisé date mal ses fichiers, et rien dans les
+    // écrans de transport ne le laisse voir.
+    async function bulkNtp() {
+        if (!selected.size) return;
+        const server = $("#hd-bulk-ntp").value.trim();
+        if (!server) { toast("Indiquez le serveur de temps à appliquer", "error"); return; }
+        if (!window.confirm("Appliquer le serveur de temps « " + server + " » sur "
+            + selected.size + " machine(s) ?")) return;
+        await runBulk({ action: "clock", ids: Array.from(selected), server, enabled: true });
+        await loadClockAll(true);
+        if (view === "overview") loadOverview();
+    }
+
     async function runBulk(body) {
         try {
             const data = await ctx.api("bulk", { body });
@@ -1006,8 +1177,11 @@ window.BTTools.hyperdeck = (function () {
             host.innerHTML = '<p class="hd-empty">Aucune machine.</p>';
             return;
         }
+        // « Horloge » est volontairement APRÈS le timecode et distincte de lui : le
+        // timecode est une donnée de montage, l'horloge date les fichiers. Les confondre
+        // est l'erreur qui fait chercher une dérive au mauvais endroit.
         host.innerHTML = '<table class="hd-table hd-ov-table"><thead><tr>'
-            + "<th>Machine</th><th>Groupe</th><th>État</th><th>Timecode</th><th>Format</th>"
+            + "<th>Machine</th><th>Groupe</th><th>État</th><th>Timecode</th><th>Horloge</th><th>Format</th>"
             + "<th>Format fichier</th><th>Entrée</th><th>Slots</th><th>Volume réseau</th><th>Restant</th>"
             + "</tr></thead><tbody>"
             + rows.map((r) => {
@@ -1023,6 +1197,7 @@ window.BTTools.hyperdeck = (function () {
                     + "<td>" + esc(r.group || "—") + "</td>"
                     + "<td>" + statusBadge(s) + "</td>"
                     + '<td class="hd-mono">' + esc(s.display_timecode || s.timecode || "—") + "</td>"
+                    + "<td>" + clockCell(r.id) + "</td>"
                     + "<td>" + esc(s.video_format || "—") + "</td>"
                     + "<td>" + esc(s.file_format || "—") + "</td>"
                     + "<td>" + esc(s.video_input || "—") + "</td>"

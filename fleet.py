@@ -219,6 +219,48 @@ class Manager:
 MANAGER = Manager()
 
 
+# --------------------------------------------------------------------------- horloge
+# L'horloge ne passe PAS par la connexion permanente : elle vit dans une autre interface
+# (HTTP /admin/api/v1, cf. admin.py), qui n'émet aucune notification. Chaque lecture est
+# donc un aller-retour réseau — d'où ce cache, pour qu'afficher la vue d'ensemble toutes
+# les quelques secondes n'aille pas questionner tout le parc à chaque fois.
+CLOCK_TTL = _env_num("CLOCK_TTL", 30, 5, 600)
+
+_clock = {}                       # deck_id -> (lu_à, rapport)
+_clock_lock = threading.Lock()
+
+
+def clock_cached(deck_id, max_age=None):
+    """Dernier rapport d'horloge, ou None s'il est trop vieux. `max_age=0` force la
+    relecture ; None applique le TTL."""
+    ttl = CLOCK_TTL if max_age is None else max_age
+    with _clock_lock:
+        entry = _clock.get(deck_id)
+    if not entry:
+        return None
+    read_at, report = entry
+    if ttl is not None and (time.time() - read_at) > ttl:
+        return None
+    return report
+
+
+def clock_store(deck_id, report):
+    with _clock_lock:
+        _clock[deck_id] = (time.time(), report)
+    return report
+
+
+def clock_last(deck_id):
+    """Dernier rapport connu, PÉRIMÉ OU NON, avec son âge : la vue d'ensemble préfère
+    afficher une heure d'il y a une minute en le disant, plutôt qu'une case vide."""
+    with _clock_lock:
+        entry = _clock.get(deck_id)
+    if not entry:
+        return None
+    read_at, report = entry
+    return dict(report, age=round(time.time() - read_at, 1))
+
+
 def start_manager():
     """Ouvre les connexions et les tient ouvertes. Une exception ne doit jamais arrêter la
     boucle : un parc entier injoignable reste un parc à surveiller."""

@@ -5,7 +5,7 @@
 FROM python:3.13-slim
 
 WORKDIR /app
-COPY server.py fleet.py protocol.py schema.py /app/
+COPY server.py fleet.py protocol.py schema.py admin.py /app/
 
 # Parc (adresses, identifiants) persisté dans un volume monté par l'app sur /data
 # (cf. docker.volume du plugin.json). L'ÉTAT des machines, lui, n'est jamais stocké : il

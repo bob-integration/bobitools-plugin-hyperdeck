@@ -33,10 +33,12 @@ coup. Deux règles héritées de ptz :
 import json
 import re
 import threading
+import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
+import admin
 import fleet
 import protocol
 import schema
@@ -161,6 +163,46 @@ def _resp_json(resp):
     """Réponse protocolaire rendue au navigateur, telle quelle."""
     return {"code": resp.code, "text": resp.text, "ok": resp.ok,
             "lines": resp.lines, "params": resp.params}
+
+
+def _clock_for(deck, force=False):
+    """Rapport d'horloge d'une machine, en passant par le cache.
+
+    L'adresse est celle du parc : l'API d'administration écoute sur le port 80 de la même
+    machine que le protocole 9993, mais c'est bien un autre service — une machine peut
+    parfaitement répondre au protocole et refuser l'accès web (réglage « Accès réseau »),
+    auquel cas l'horloge est simplement indisponible et on le dit."""
+    deck_id = deck.get("id")
+    if not force:
+        cached = fleet.clock_cached(deck_id)
+        if cached is not None:
+            return cached
+    report = admin.clock_report(deck.get("host") or "", time.time())
+    return fleet.clock_store(deck_id, report)
+
+
+def _clock_all(force=False):
+    """Horloge de TOUTES les machines activées, lues en parallèle. Une machine muette ne
+    doit pas retarder les autres : chacune porte son propre échec."""
+    decks = [d for d in fleet.load_decks() if d.get("enabled", True)]
+    out = [None] * len(decks)
+
+    def work(i, deck):
+        try:
+            rep = _clock_for(deck, force=force)
+        except Exception as e:                          # noqa: BLE001
+            rep = {"available": False, "error": "erreur interne : %s" % e}
+        out[i] = {"id": deck.get("id"), "name": deck.get("name") or deck.get("host"),
+                  "host": deck.get("host"), "group": deck.get("group") or "", "clock": rep}
+
+    for start in range(0, len(decks), BULK_WORKERS):
+        batch = [(i, decks[i]) for i in range(start, min(start + BULK_WORKERS, len(decks)))]
+        threads = [threading.Thread(target=work, args=(i, d), daemon=True) for i, d in batch]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+    return [r for r in out if r]
 
 
 def _run_bulk(deck_ids, fn):
@@ -317,6 +359,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"paths": [fleet.nas_public(p) for p in fleet.load_nas()]})
             if parts == ["nas", "matrix"]:
                 return self._nas_matrix()
+            if parts == ["clock"]:
+                # `refresh=1` : on redemande à toutes les machines. Sans ça, l'affichage
+                # se contente du cache — l'horloge n'a pas besoin d'être relue à la seconde.
+                force = (query.get("refresh") or [""])[0] in ("1", "true")
+                return self._send(200, {"rows": _clock_all(force=force),
+                                        "server_time": time.time(),
+                                        "ttl": fleet.CLOCK_TTL})
             if len(parts) == 2 and parts[0] == "decks":
                 deck = self._deck_or_404(parts[1])
                 return None if not deck else self._detail(deck)
@@ -332,6 +381,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, {"commands": fleet.MANAGER.state(deck["id"])["commands"]})
                 if parts[2] == "nas":
                     return self._deck_nas(deck, query)
+                if parts[2] == "clock":
+                    return self._send(200, {"clock": _clock_for(deck, force=True),
+                                            "server_time": time.time()})
             return self._send(404, {"error": "route inconnue"})
         except protocol.HyperDeckError as e:
             return self._send(502, {"error": str(e)})
@@ -627,6 +679,14 @@ class Handler(BaseHTTPRequestHandler):
             c.refresh()
             return self._send(200, {"ok": True, "state": c.state()})
 
+        # L'horloge se règle par l'API d'administration (HTTP), pas par le protocole
+        # Ethernet : on la traite AVANT d'exiger une connexion 9993. Une machine dont le
+        # protocole Ethernet est désactivé — c'est un réglage de la machine — doit rester
+        # réglable, et une machine dont l'horloge dérive est justement une machine qu'on
+        # veut pouvoir corriger même quand le reste va mal.
+        if action == "clock":
+            return self._clock_write(deck, body)
+
         c = fleet.MANAGER.require(deck_id)
 
         if action == "command":
@@ -665,6 +725,21 @@ class Handler(BaseHTTPRequestHandler):
 
         return self._send(404, {"error": "action inconnue"})
 
+    def _clock_write(self, deck, body):
+        """Règle le serveur de temps d'UNE machine, puis relit son état.
+
+        La machine accepte n'importe quelle chaîne sans broncher : c'est la relecture qui
+        dira si elle se synchronise. On la rend donc toujours, y compris quand l'état est
+        « en attente » — l'appelant saura que l'écriture est passée mais que le résultat
+        n'est pas encore acquis."""
+        host = deck.get("host") or ""
+        try:
+            state = admin.set_ntp(host, body.get("server"), _bool(body.get("enabled")))
+        except admin.AdminError as e:
+            return self._send(502, {"error": str(e)})
+        report = _clock_for(deck, force=True)
+        return self._send(200, {"ntp": state, "clock": report, "server_time": time.time()})
+
     def _settings_write(self, client, body):
         """Écrit un ou plusieurs réglages, UN PAR COMMANDE.
 
@@ -701,6 +776,40 @@ class Handler(BaseHTTPRequestHandler):
         ids = body.get("ids") or []
         if not ids:
             return self._send(400, {"error": "aucune machine sélectionnée"})
+
+        if action == "clock":
+            # Le même serveur de temps sur tout le parc : c'est le geste qui répare
+            # réellement une dérive, puisqu'une machine mal synchronisée date mal ses
+            # fichiers. `_run_bulk` passe par la connexion 9993 ; l'horloge, elle, tient
+            # à l'API d'administration, d'où cette boucle parallèle à part.
+            decks = [d for d in fleet.load_decks() if d.get("id") in set(ids)]
+            rows = [None] * len(decks)
+            server, enabled = body.get("server"), _bool(body.get("enabled"))
+
+            def apply_clock(i, deck):
+                row = {"id": deck.get("id"), "name": deck.get("name") or deck.get("host"),
+                       "ok": False, "error": None}
+                try:
+                    state = admin.set_ntp(deck.get("host") or "", server, enabled)
+                    row.update(ok=True, state=state.get("state"),
+                               text=state.get("state_label"))
+                    fleet.clock_store(deck.get("id"), admin.clock_report(
+                        deck.get("host") or "", time.time()))
+                except admin.AdminError as e:
+                    row["error"] = str(e)
+                except Exception as e:                  # noqa: BLE001
+                    row["error"] = "erreur interne : %s" % e
+                rows[i] = row
+
+            for start in range(0, len(decks), BULK_WORKERS):
+                batch = [(i, decks[i]) for i in range(start, min(start + BULK_WORKERS, len(decks)))]
+                threads = [threading.Thread(target=apply_clock, args=(i, d), daemon=True)
+                           for i, d in batch]
+                for th in threads:
+                    th.start()
+                for th in threads:
+                    th.join()
+            return self._send(200, {"results": [r for r in rows if r]})
 
         if action == "settings":
             values = body.get("values") or {}

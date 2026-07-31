@@ -61,5 +61,6 @@
   "plugin.hyperdeck.nas.urlRequired": "Share address required",
   "plugin.hyperdeck.nas.saved": "Path saved",
   "plugin.hyperdeck.nas.pwHint": "Without a username, the HyperDeck connects as guest.",
-  "plugin.hyperdeck.nas.confirmDel": "Remove this path from the tool's library?\nBookmarks already stored on the decks are left untouched."
+  "plugin.hyperdeck.nas.confirmDel": "Remove this path from the tool's library?\nBookmarks already stored on the decks are left untouched.",
+  "plugin.hyperdeck.bulk.ntp": "Apply NTP server"
 }
