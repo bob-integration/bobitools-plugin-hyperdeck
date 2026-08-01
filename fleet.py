@@ -301,14 +301,26 @@ def import_data(data):
             existing = by_host.get(h)
             if existing:
                 pw = existing.get("password")
-                existing.update({k: v for k, v in it.items() if k != "password"})
-                existing["id"] = existing.get("id") or uuid.uuid4().hex[:12]
+                keep_id = existing.get("id") or uuid.uuid4().hex[:12]
+                # L'`id` du fichier importé est écarté au même titre que le mot de passe :
+                # une machine déjà connue GARDE son identité. La laisser changer casserait
+                # les références qui la désignent (sélections, chemins réseau appliqués)
+                # et pourrait la faire entrer en collision avec une autre entrée.
+                existing.update({k: v for k, v in it.items() if k not in ("password", "id")})
+                existing["id"] = keep_id
                 if pw:
                     existing["password"] = pw
                 updated += 1
             else:
                 rec = {k: v for k, v in it.items() if k != "password"}
-                rec["id"] = rec.get("id") or uuid.uuid4().hex[:12]
+                # Un id importé n'est repris QUE s'il est libre. Deux entrées de même id
+                # font diverger les lectures du parc : `find()` rend la première, la
+                # synchronisation du gestionnaire garde la dernière — et c'est cette
+                # dernière qui fixe l'hôte du client TCP. L'écran afficherait alors une
+                # machine et la commande partirait sur une autre.
+                wanted = rec.get("id")
+                if not wanted or any(d.get("id") == wanted for d in cur):
+                    rec["id"] = uuid.uuid4().hex[:12]
                 cur.append(rec)
                 by_host[h] = rec
                 added += 1

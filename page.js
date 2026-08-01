@@ -302,6 +302,11 @@ window.BTTools.hyperdeck = (function () {
         selected.clear();
         if (e.target.checked) decks.forEach((d) => selected.add(d.id));
         renderCards();
+        // Indispensable : sans ce rappel, le brouillon d'édition (selDirty) survivait au
+        // changement de sélection et le panneau ne se rechargeait pas. Une modification
+        // préparée sur deux machines pouvait ainsi partir sur TOUT le parc au clic
+        // suivant — le pire défaut possible dans un outil qui écrit sur du matériel.
+        onSelectionChanged();
     }
 
     // La sélection ne commande plus une barre : elle décide de ce qu'affiche le panneau.
