@@ -2,7 +2,7 @@
   "license": "GPL-3.0-or-later",
   "type": "hyperdeck",
   "label": "HyperDeck",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "runtime": "docker",
   "description": "Pilotage d'un parc d'enregistreurs Blackmagic HyperDeck (Studio, Extreme, Shuttle) via le HyperDeck Ethernet Protocol (TCP 9993). Connexion PERMANENTE par machine : l'état affiché vient des notifications asynchrones de l'appareil, pas d'une interrogation périodique. Statut transport (lecture / enregistrement / timecode), état des slots et médias (durée restante, système de fichiers), réglages complets (entrées vidéo/audio, format de fichier, timecode, référence, préfixe d'enregistrement), transport à distance et actions GROUPÉES (REC / STOP simultanés sur plusieurs machines). VOLUMES RÉSEAU : bibliothèque de chemins (serveur, identifiant, partage) tenue par l'outil, appliquée en un clic à une ou plusieurs machines, avec une matrice chemins × machines qui distingue signet, partage sélectionné et volume réellement monté. Conteneur Docker isolé. HORLOGE ET NTP : l'heure de chaque machine, l'écart avec le serveur et l'état de synchronisation, réglables par machine ou sur tout le parc — via l'API d'administration HTTP de l'appareil, la seule des trois interfaces du HyperDeck qui connaisse l'horloge. SÉLECTION MULTIPLE : cocher plusieurs machines transforme le panneau de détail en panneau de la sélection — mêmes onglets et mêmes champs que pour une machine seule, chaque réglage indiquant s'il est commun à toutes ou s'il diverge (avec le détail valeur par valeur), et seuls les champs touchés étant écrits. Plus de barre d'actions groupées séparée.",
   "badge": {
@@ -21,7 +21,7 @@
     "page_css": "page.css"
   },
   "docker": {
-    "image": "bobitool-hyperdeck:0.3.1",
+    "image": "bobitool-hyperdeck:0.3.2",
     "build": true,
     "port": 8080,
     "volume": "/data",

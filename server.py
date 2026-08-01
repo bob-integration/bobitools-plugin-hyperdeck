@@ -887,11 +887,31 @@ class Handler(BaseHTTPRequestHandler):
 
             def apply_settings(deck, client):
                 last = None
-                for key, value in values.items():
+                keys = list(values)
+                for idx, key in enumerate(keys):
+                    value = values[key]
                     v = "true" if isinstance(value, bool) and value else (
                         "false" if isinstance(value, bool) else protocol.esc_value(value))
                     last = client.command("configuration: %s: %s" % (
                         protocol.esc_value(key), v), timeout=15)
+                    if last.code == 213:
+                        # « deck rebooting » : la machine redémarre et ferme la connexion.
+                        # 213 est un 2xx, donc `ok` vaut True et le seul test `if not last.ok`
+                        # laissait la boucle continuer : les réglages suivants partaient dans
+                        # une socket morte et la HyperDeckError qui s'ensuivait faisait compter
+                        # la machine « en échec de connexion », masquant à la fois la vraie
+                        # cause et le fait que le premier réglage, lui, était bien passé.
+                        # On s'arrête donc ici, comme le chemin mono-machine (`_settings_write`),
+                        # et on NOMME les réglages non appliqués : sur un lot, l'opérateur doit
+                        # savoir quoi rejouer après le redémarrage sans avoir à tout réappliquer
+                        # (ce qui relancerait un redémarrage de tout le parc).
+                        reste = keys[idx + 1:]
+                        if reste:
+                            last = protocol.Response(
+                                last.code,
+                                "%s — réglages non appliqués (à rejouer après redémarrage) : %s"
+                                % (last.text, ", ".join(reste)), [])
+                        break
                     if not last.ok:
                         return last
                 return last
