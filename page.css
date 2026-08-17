@@ -226,3 +226,11 @@
 .hd-cell.part .hd-cellbtn, .hd-cell.part > span {
   background: var(--bg-hover); color: var(--text); }
 .hd-tag.on { background: var(--status-running-bg); color: var(--status-running-fg); }
+
+/* Préparation de formatage armée. Encadrée et colorée en avertissement : c'est le seul
+   état de l'outil où un clic de plus efface un disque, et il doit se distinguer d'un
+   panneau ordinaire au premier coup d'œil. */
+.hd-armed {
+  border: 1px solid var(--status-warning-fg); border-radius: var(--radius-small);
+  background: var(--status-warning-bg); padding: 10px 12px; margin: 8px 0; }
+.hd-armed p { margin: 0 0 8px; color: var(--status-warning-fg); }

@@ -39,9 +39,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 import admin
+import ember
 import fleet
 import protocol
 import schema
+import supports
 
 PORT = 8080
 BULK_WORKERS = 12           # assez pour qu'un REC groupé parte ensemble sur un gros parc
@@ -349,6 +351,8 @@ class Handler(BaseHTTPRequestHandler):
                     "default_port": protocol.PORT,
                     "sections": schema.sections(),
                 })
+            if parts == ["ember", "tree"]:
+                return self._ember_tree()
             if parts == ["decks"]:
                 return self._list()
             if parts == ["overview"]:
@@ -404,6 +408,8 @@ class Handler(BaseHTTPRequestHandler):
             if parts == ["import"]:
                 return self._send(200, {"ok": True,
                                         **fleet.import_data(body.get("data") if "data" in body else body)})
+            if parts == ["ember", "set"]:
+                return self._ember_set(body)
             if parts == ["bulk"]:
                 return self._bulk(body)
             if parts == ["nas"]:
@@ -670,11 +676,24 @@ class Handler(BaseHTTPRequestHandler):
 
     def _detail(self, deck):
         state = fleet.MANAGER.state(deck["id"])
+        armed = supports.armed(deck["id"])
         return self._send(200, {
             "deck": _public(deck, state),
             "state": state,
             "settings": schema.describe(state.get("configuration")),
             "sections": schema.sections(),
+            # Supports résolus en POSITIONS : l'écran n'a pas plus que le contrôleur à
+            # raisonner en numéros de slot, qui bougent avec le disque externe sélectionné.
+            "supports": supports.resolve(state),
+            "filesystems": list(protocol.FILESYSTEMS),
+            "format": {
+                "armed": bool(armed),
+                "support": (armed or {}).get("key"),
+                "filesystem": (armed or {}).get("filesystem"),
+                "name": (armed or {}).get("name"),
+                "expires_in": round(armed["expires_at"] - time.time()) if armed else 0,
+                "last_result": supports.last_result(deck["id"]),
+            },
         })
 
     def _overview(self):
@@ -684,36 +703,24 @@ class Handler(BaseHTTPRequestHandler):
         for d in fleet.load_decks():
             state = fleet.MANAGER.state(d["id"])
             s = _summary(state)
-            slots = []
-            for sid, slot in sorted((state.get("slots") or {}).items()):
-                slots.append({
-                    "slot_id": sid,
-                    "status": slot.get("status"),
-                    "volume_name": slot.get("volume name"),
-                    "recording_time": slot.get("recording time"),
-                    "recording_time_h": _fmt_duration(slot.get("recording time")),
-                    "video_format": slot.get("video format"),
-                    "blocked": slot.get("blocked"),
-                    "device_name": slot.get("device name"),
-                    "is_network": False,
-                })
-            # Le slot réseau est ajouté à la suite : il n'est pas énuméré par `slot count`,
-            # mais c'est un emplacement d'enregistrement comme les autres — l'omettre du
-            # tableau ferait disparaître la destination réelle quand on enregistre sur le NAS.
-            net = ((state.get("nas") or {}).get("network_slot")) or {}
-            if net:
-                slots.append({
-                    "slot_id": net.get("slot id") or "réseau",
-                    "status": net.get("status"),
-                    "volume_name": net.get("volume name"),
-                    "recording_time": net.get("recording time"),
-                    "recording_time_h": _fmt_duration(net.get("recording time")),
-                    "video_format": net.get("video format"),
-                    "blocked": net.get("blocked"),
-                    "device_name": net.get("device name") or "network",
-                    "is_network": True,
-                    "url": net.get("url"),
-                })
+            # Une ligne par POSITION du catalogue, jamais par clé de rangement : celle d'un
+            # disque externe non sélectionné est « dev:usb512 », qui n'a rien à faire sous
+            # les yeux d'un exploitant. Le catalogue donne aussi les positions VIDES, ce que
+            # l'énumération des slots ne faisait pas — un lecteur de carte sans carte est
+            # une information utile en tournage.
+            slots = [{
+                "slot_id": sup["slot_id"],
+                "label": sup["label"],
+                "key": sup["key"],
+                "status": sup["status"],
+                "volume_name": sup["volume_name"],
+                "recording_time": sup["recording_time"],
+                "recording_time_h": _fmt_duration(sup["recording_time"]),
+                "blocked": sup["blocked"],
+                "active": sup["active"],
+                "is_network": sup["key"] == "net",
+                "url": sup["url"],
+            } for sup in supports.resolve(state)]
             rows.append({"id": d["id"], "name": d.get("name") or d.get("host"),
                          "host": d.get("host"), "group": d.get("group") or "",
                          "enabled": d.get("enabled", True), "summary": s, "slots": slots,
@@ -771,6 +778,21 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"results": self._deck_nas_action(c, body),
                                     "nas": c.state().get("nas")})
 
+        if action in ("format", "format-confirm", "format-cancel"):
+            return self._format_action(deck_id, c, action, body)
+
+        if action == "support":
+            # Rendre un support actif. Peut demander deux commandes (sélection du disque
+            # externe puis choix du slot) et peut désélectionner un autre disque externe :
+            # l'avertissement est remonté tel quel, jamais avalé.
+            try:
+                responses, warn = supports.activate(c, body.get("support"))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            return self._send(200, {"responses": [_resp_json(r) for r in responses],
+                                    "warning": warn,
+                                    "supports": supports.resolve(c.state())})
+
         if action == "transport":
             cmd = _transport_command(body.get("action"), body)
             if not cmd:
@@ -793,6 +815,67 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"response": _resp_json(resp), "state": c.state()})
 
         return self._send(404, {"error": "action inconnue"})
+
+    # -- Ember+ --------------------------------------------------------------
+
+    def _ember_tree(self):
+        """Sous-arbre servi depuis le CACHE, sans une seule I/O vers les machines.
+
+        Le service ré-agrège toutes les cinq secondes avec un délai de garde de dix : douze
+        machines interrogées en synchrone ici feraient déborder ce délai, et le sous-arbre
+        entier serait remplacé par son dernier état connu — un parc figé chez le contrôleur
+        sans qu'aucune erreur ne le dise."""
+        decks = ember.ensure_indexes()
+        return self._send(200, {"label": ember.LABEL,
+                                "nodes": ember.build_nodes(decks, fleet.MANAGER.state)})
+
+    def _ember_set(self, body):
+        ref = body.get("ref") or {}
+        deck_id = ref.get("deck")
+        deck = fleet.get(deck_id)
+        if not deck:
+            return self._send(404, {"error": "machine inconnue"})
+        try:
+            client = fleet.MANAGER.require(deck_id)
+            out = ember.apply_set(ref, body.get("value"), client, deck_id)
+        except supports.Refused as e:
+            return self._send(409, {"error": str(e)})
+        except ValueError as e:
+            return self._send(400, {"error": str(e)})
+        # Les réponses protocolaires sont sérialisées ici plutôt que dans `ember.py`, qui
+        # n'a pas à connaître la forme rendue au réseau.
+        if "response" in out:
+            out["response"] = _resp_json(out["response"])
+        if "responses" in out:
+            out["responses"] = [_resp_json(r) for r in out["responses"]]
+        return self._send(200, {"ok": True, **out})
+
+    def _format_action(self, deck_id, client, action, body):
+        """Formatage en deux temps. Le seul geste irréversible de tout l'outil.
+
+        `format` arme et ne détruit rien ; `format-confirm` exécute ; `format-cancel`
+        oublie la préparation. L'annulation n'est qu'un oubli CÔTÉ OUTIL : la machine ne
+        sait pas retirer un jeton qu'elle a émis, aucune commande ne le permet, et elle
+        l'accepterait encore un quart d'heure plus tard (mesuré). C'est précisément pour
+        ça que la péremption tenue ici est la seule barrière réelle."""
+        try:
+            if action == "format":
+                out = supports.prepare(deck_id, client, body.get("support"),
+                                       body.get("filesystem") or protocol.FILESYSTEMS[0],
+                                       body.get("name"))
+            elif action == "format-confirm":
+                out = supports.confirm(deck_id, client, body.get("token"))
+            else:
+                out = {"cancelled": supports.disarm(deck_id)}
+        except supports.Refused as e:
+            return self._send(409, {"error": str(e)})
+        armed = supports.armed(deck_id)
+        return self._send(200, {**out,
+                                "armed": bool(armed),
+                                "expires_in": round(armed["expires_at"] - time.time())
+                                if armed else 0,
+                                "supports": supports.resolve(client.state()),
+                                "last_result": supports.last_result(deck_id)})
 
     def _clock_write(self, deck, body):
         """Règle le serveur de temps d'UNE machine, puis relit son état.

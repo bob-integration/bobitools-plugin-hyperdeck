@@ -936,7 +936,6 @@ window.BTTools.hyperdeck = (function () {
     // ── Onglet Transport ─────────────────────────────────────
     function transportHtml(st, s) {
         const tr_ = st.transport || {};
-        const slots = st.slots || {};
         const rows = [
             ["État", (STATUS[s.status] || {}).label || s.status || "—"],
             ["Timecode", tr_.timecode || "—"],
@@ -950,7 +949,6 @@ window.BTTools.hyperdeck = (function () {
             ["Pilotage à distance", yn((st.remote || {}).enabled)
                 + (String((st.remote || {}).override) === "true" ? " (forcé pour la session)" : "")],
         ];
-        const slotIds = Object.keys(slots).sort();
         return '<div class="hd-transport">'
             + '<div class="hd-tbtns">'
             + '<button class="btn btn-red hd-big" data-act="rec" type="button">⏺ REC</button>'
@@ -971,31 +969,14 @@ window.BTTools.hyperdeck = (function () {
             + "</div>"
             + '<dl class="hd-kv">' + rows.map(([k, v]) =>
                 "<dt>" + esc(k) + "</dt><dd>" + esc(v) + "</dd>").join("") + "</dl>"
-            + "<h4>Slots</h4>"
-            + (slotIds.length ? '<table class="hd-table"><thead><tr>'
-                + "<th>Slot</th><th>État</th><th>Volume</th><th>Restant</th><th>Format</th><th></th>"
-                + "</tr></thead><tbody>"
-                + slotIds.map((id) => slotRow(id, slots[id], s)).join("")
-                + "</tbody></table>"
-                : '<p class="hd-empty">Aucun slot rapporté.</p>')
+            // Les supports remplacent l'ancienne énumération des slots. Elle rendait la clé
+            // de rangement telle quelle — « dev:usb512 » pour un SSD non sélectionné — et
+            // son bouton « activer » envoyait ce texte comme numéro de slot.
+            + supportsHtml(st)
             + '<div class="hd-danger">'
             + '<button class="btn btn-sm" data-act="reboot" type="button">Redémarrer la machine</button>'
             + "</div>"
             + "</div>";
-    }
-
-    function slotRow(id, slot, s) {
-        const active = String(s.slot_id || "") === String(id);
-        const status = SLOT_STATUS[slot.status] || slot.status || "—";
-        const blocked = String(slot.blocked) === "true";
-        return "<tr" + (active ? ' class="on"' : "") + ">"
-            + "<td>" + esc(id) + (active ? " ●" : "") + "</td>"
-            + "<td>" + esc(status) + (blocked ? " (bloqué)" : "") + "</td>"
-            + "<td>" + esc(slot["volume name"] || slot["device name"] || "—") + "</td>"
-            + "<td>" + esc(fmtDuration(slot["recording time"])) + "</td>"
-            + "<td>" + esc(slot["video format"] || "—") + "</td>"
-            + '<td><button class="btn btn-sm" data-act="slot" data-slot="' + esc(id) + '" type="button">'
-            + (active ? "actif" : "activer") + "</button></td></tr>";
     }
 
     // ── Onglet Réglages ──────────────────────────────────────
@@ -1061,9 +1042,87 @@ window.BTTools.hyperdeck = (function () {
     }
 
     // ── Onglet Médias ────────────────────────────────────────
+    // ── Supports et formatage ────────────────────────────────
+    // Les supports sont présentés en POSITIONS (Carte SD 1, SSD USB-C, Réseau) et non en
+    // numéros de slot : le numéro du slot externe change selon le disque sélectionné, et
+    // un disque externe non sélectionné n'en a aucun. Raisonner en numéros ici obligerait
+    // l'opérateur à faire dans sa tête une traduction que l'outil sait faire.
+    const SLOT_STATE_FR = { mounted: "monté", mounting: "montage…", empty: "vide",
+        error: "erreur", absent: "absent" };
+
+    function supportsHtml(st) {
+        const sups = (detail && detail.supports) || [];
+        if (!sups.length) return "";
+        return "<h4>Supports</h4>"
+            + '<table class="hd-table"><thead><tr><th>Position</th><th>État</th>'
+            + "<th>Volume</th><th>Restant</th><th></th></tr></thead><tbody>"
+            + sups.map((s) => {
+                const st2 = SLOT_STATE_FR[s.status] || s.status || "absent";
+                return "<tr" + (s.active ? ' class="on"' : "") + "><td>" + esc(s.label)
+                    + (s.active ? ' <span class="hd-tag">actif</span>' : "")
+                    + (s.blocked ? ' <span class="hd-tag warn">protégé</span>' : "")
+                    + "</td><td>" + esc(st2) + '</td><td class="hd-mono">'
+                    + esc(s.volume_name || "—") + "</td><td>"
+                    + esc(fmtDuration(s.recording_time)) + "</td><td>"
+                    + (s.present && !s.active
+                        ? '<button class="btn btn-sm" data-act="support-use" data-support="'
+                          + esc(s.key) + '" type="button">Rendre actif</button>' : "")
+                    + "</td></tr>";
+            }).join("")
+            + "</tbody></table>";
+    }
+
+    function formatHtml(st) {
+        const f = (detail && detail.format) || {};
+        const fss = (detail && detail.filesystems) || ["exFAT", "HFS+"];
+        const cibles = ((detail && detail.supports) || []).filter((s) => s.formattable);
+        if (!cibles.length) return "";
+        let html = '<h4>Formatage <span class="hd-tag warn">destructif</span></h4>';
+        if (f.armed) {
+            // Deuxième temps. Le bouton de confirmation n'apparaît QUE là, et la
+            // préparation périme d'elle-même : c'est ce qui sépare un clic d'un disque
+            // effacé, et la machine, elle, n'y contribue pas — elle accepterait encore le
+            // jeton un quart d'heure plus tard.
+            html += '<div class="hd-armed">'
+                + "<p><strong>Prêt à formater</strong> — "
+                + esc(labelOf(cibles, f.support)) + " en " + esc(f.filesystem || "")
+                + (f.name ? " sous le nom « " + esc(f.name) + " »" : "")
+                + ". Cette préparation expire dans " + esc(String(f.expires_in || 0))
+                + " s.</p>"
+                + '<button class="btn btn-sm btn-red" data-act="fmt-confirm" type="button">'
+                + "Confirmer le formatage</button> "
+                + '<button class="btn btn-sm" data-act="fmt-cancel" type="button">Annuler</button>'
+                + "</div>";
+        } else {
+            html += '<div class="hd-inline">'
+                + '<label>Support <select id="hd-fmt-target">'
+                + cibles.map((s) => '<option value="' + esc(s.key) + '"'
+                    + (s.present ? "" : " disabled")
+                    + ">" + esc(s.label) + (s.present ? "" : " (absent)") + "</option>").join("")
+                + "</select></label>"
+                + '<label>Système de fichiers <select id="hd-fmt-fs">'
+                + fss.map((x) => '<option value="' + esc(x) + '">' + esc(x) + "</option>").join("")
+                + "</select></label>"
+                + '<label>Nom du volume <input id="hd-fmt-name" placeholder="facultatif — '
+                + 'sans espace"></label>'
+                + '<button class="btn btn-sm" data-act="fmt-prepare" type="button">Préparer…</button>'
+                + "</div>"
+                + '<p class="hd-meta">Sans nom, le volume garde le sien. Le volume réseau '
+                + "n'est pas formatable depuis cet écran.</p>";
+        }
+        if (f.last_result) html += '<p class="hd-meta">' + esc(f.last_result) + "</p>";
+        return html;
+    }
+
+    function labelOf(list, key) {
+        const s = list.find((x) => x.key === key);
+        return s ? s.label : (key || "");
+    }
+
     function mediaHtml(st) {
         const slots = Object.keys(st.slots || {}).sort();
-        let html = '<div class="hd-inline">'
+        let html = supportsHtml(st) + formatHtml(st) + "<h4>Contenu</h4>"
+            + '<div class="hd-inline">'
             + "<label>Disque <select id=\"hd-media-slot\">"
             + '<option value="">slot actif</option>'
             + slots.map((s) => '<option value="' + esc(s) + '"'
@@ -1187,7 +1246,8 @@ window.BTTools.hyperdeck = (function () {
             if (!v) return toast("Timecode requis", "error");
             return transport("goto", { kind: "timecode", target: v });
         }
-        if (act === "slot") return transport("slot", { slot_id: parseInt(t.dataset.slot, 10) || 1 });
+        // Plus d'action « slot » : choisir un support passe par `support-use`, qui sait
+        // qu'un disque externe demande DEUX commandes et qu'il en désélectionne un autre.
         if (act === "reboot") {
             if (!window.confirm("Redémarrer la machine ? Toute lecture ou tout enregistrement en cours sera interrompu.")) return;
             return transport("reboot", {});
@@ -1195,6 +1255,10 @@ window.BTTools.hyperdeck = (function () {
         if (act === "settings-reload") { settingsDirty = false; return loadDetail(true); }
         if (act === "media-disk") return loadMedia("disk");
         if (act === "media-timeline") return loadMedia("timeline");
+        if (act === "support-use") return useSupport(t.dataset.support);
+        if (act === "fmt-prepare") return formatPrepare();
+        if (act === "fmt-confirm") return formatConfirm();
+        if (act === "fmt-cancel") return formatCancel();
         if (act === "net-mount") return deckNasAction("add_select");
         if (act === "net-add") return deckNasAction("add");
         if (act === "net-deselect") return deckNasAction("deselect");
@@ -1267,6 +1331,62 @@ window.BTTools.hyperdeck = (function () {
             if (data.state) { detail = Object.assign({}, detail, { state: data.state }); }
             renderDetail(true);
             refresh();
+        } catch (e) { toast(e.message, "error"); }
+    }
+
+    // ── Supports et formatage ────────────────────────────────
+    async function useSupport(key) {
+        if (!selId || !key) return;
+        try {
+            const data = await ctx.api("decks/" + encodeURIComponent(selId) + "/support",
+                { body: { support: key } });
+            // Les disques externes s'excluent : basculer sur le SSD retire le volume
+            // réseau. L'avertissement du serveur est remonté tel quel — c'est la
+            // destination d'enregistrement de la machine qui vient de changer.
+            if (data.warning) toast(data.warning, "warning");
+            else toast("Support actif : " + key);
+            await loadDetail(true);
+        } catch (e) { toast(e.message, "error"); }
+    }
+
+    async function formatPrepare() {
+        if (!selId) return;
+        const target = $("#hd-fmt-target"), fs = $("#hd-fmt-fs"), name = $("#hd-fmt-name");
+        if (!target || !target.value) return toast("Choisissez un support", "error");
+        try {
+            const data = await ctx.api("decks/" + encodeURIComponent(selId) + "/format",
+                { body: { support: target.value, filesystem: fs ? fs.value : "exFAT",
+                    name: name ? name.value.trim() : "" } });
+            if (!data.ready) toast((data.code || "") + " " + (data.text || "refusé"), "warning");
+            await loadDetail(true);
+        } catch (e) { toast(e.message, "error"); }
+    }
+
+    async function formatConfirm() {
+        if (!selId) return;
+        const f = (detail && detail.format) || {};
+        const cibles = ((detail && detail.supports) || []).filter((s) => s.formattable);
+        // Dernier rempart devant l'opérateur. Le formatage est le seul geste de l'outil
+        // qu'aucune manœuvre ne rattrape : la question nomme le support ET le volume, pour
+        // qu'on ne confirme jamais « un formatage » mais celui-là précisément.
+        const sup = cibles.find((s) => s.key === f.support) || {};
+        if (!window.confirm("Formater " + (sup.label || f.support) + " en " + (f.filesystem || "")
+            + (sup.volume_name ? " (volume « " + sup.volume_name + " »)" : "")
+            + " ?\n\nTout son contenu sera effacé définitivement.")) return;
+        try {
+            const data = await ctx.api("decks/" + encodeURIComponent(selId) + "/format-confirm",
+                { body: {} });
+            toast((data.code || "") + " " + (data.text || ""), data.ok ? "success" : "warning");
+            await loadDetail(true);
+        } catch (e) { toast(e.message, "error"); }
+    }
+
+    async function formatCancel() {
+        if (!selId) return;
+        try {
+            await ctx.api("decks/" + encodeURIComponent(selId) + "/format-cancel", { body: {} });
+            toast("Préparation annulée");
+            await loadDetail(true);
         } catch (e) { toast(e.message, "error"); }
     }
 
@@ -1415,11 +1535,13 @@ window.BTTools.hyperdeck = (function () {
             + "</tr></thead><tbody>"
             + rows.map((r) => {
                 const s = r.summary || {};
-                // Le slot réseau porte son propre numéro, rapporté par la machine (souvent 3).
-                // Il est marqué « rés. » pour qu'on ne le confonde pas avec un SSD.
-                const slotTxt = (r.slots || []).map((sl) => (sl.is_network ? "rés." : "S" + sl.slot_id)
-                    + " " + (SLOT_STATUS[sl.status] || sl.status || "—")).join(" · ");
-                const best = (r.slots || []).find((sl) => String(sl.slot_id) === String(s.slot_id));
+                // Les supports sont nommés par leur POSITION (Carte SD 1, SSD USB-C, Réseau)
+                // et non par un numéro de slot : celui du slot externe change avec le disque
+                // sélectionné, et un disque externe non sélectionné n'en a aucun.
+                const slotTxt = (r.slots || []).filter((sl) => sl.status !== "absent")
+                    .map((sl) => sl.label + " " + (SLOT_STATUS[sl.status] || sl.status || "—")
+                        + (sl.active ? " ●" : "")).join(" · ");
+                const best = (r.slots || []).find((sl) => sl.active);
                 return "<tr" + (s.status === "record" ? ' class="rec"' : "") + ">"
                     + "<td><strong>" + esc(r.name) + '</strong><br><span class="hd-ip">'
                     + esc(r.host) + "</span></td>"

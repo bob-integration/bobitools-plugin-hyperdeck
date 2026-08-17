@@ -9,9 +9,11 @@ le *HyperDeck Ethernet Protocol* — protocole texte public, sur **TCP 9993**.
   arrêt, timecode, format, disque actif et durée restante.
 - **Régler** : entrées vidéo et audio, format de fichier, timecode, référence, préfixe des
   fichiers, entrées XLR… Les réglages proposés sont ceux que la MACHINE déclare.
-- **Piloter** : REC / STOP / PLAY, vitesse, aller à un timecode, choix du slot.
+- **Piloter** : REC / STOP / PLAY, vitesse, aller à un timecode, choix du support.
 - **Agir sur plusieurs machines à la fois** : lancer six enregistrements ensemble, tout
   arrêter, appliquer un format de fichier à tout le parc.
+- **Formater un support à distance**, en deux temps (cf. « Supports et formatage »).
+- **Se laisser piloter par un contrôleur broadcast** en Ember+ (cf. « L'arbre Ember+ »).
 
 ## Le point à connaître avant tout : le mode « remote »
 
@@ -243,10 +245,83 @@ Cette API ne demande **aucune authentification** alors qu'elle règle aussi le r
 accès et les comptes. L'outil s'en tient délibérément à l'horloge : une écriture malheureuse
 sur l'interface réseau couperait la machine du réseau.
 
+## Supports et formatage
+
+### Pourquoi l'outil ne parle pas en numéros de slot
+
+Un HyperDeck désigne ses supports de deux façons, et une seule est stable. Les lecteurs de
+cartes ont un numéro (1, 2). Le **slot externe** — le dernier numéro, 3 sur un Studio HD
+Plus — n'est pas un support : c'est une place occupée par le disque externe *sélectionné*,
+réseau **ou** USB-C. Un disque externe présent mais non sélectionné n'a alors aucun numéro :
+il se présente `slot id: none`, et seul son `device` l'adresse — un jeton fabriqué par la
+machine, `usb512`, que `device: usb` ne remplace pas (relevé : carte et SSD montés,
+`slot info: device: usb` répond quand même `105 no disk`).
+
+Autrement dit : le numéro d'un support change selon ce qui est sélectionné, et un support
+peut n'en avoir aucun. L'outil présente donc des **positions** — Carte SD 1, Carte SD 2,
+SSD USB-C, Réseau — qu'il traduit lui-même en `slot id` ou en `device`. Une position est
+affichée même quand le support est absent : un lecteur vide est une information.
+
+⚠ **`usb512` désigne le PORT, pas le disque.** Il survit au débranchement, au rebranchement
+et au changement de SSD. Il adresse de façon fiable, mais ne dit jamais *quel* disque est en
+place — deux disques d'un même lot sont indiscernables au protocole.
+
+⚠ **Les disques externes s'excluent.** Rendre le SSD actif **désélectionne** le volume
+réseau, et inversement. L'outil le dit à chaque bascule plutôt que de laisser le découvrir
+en enregistrant au mauvais endroit.
+
+### Le formatage, en deux temps
+
+`format: prepare:` arme et ne détruit rien ; il rend un jeton. `format: confirm: <jeton>`
+exécute, en 4 à 6 secondes sur un SSD d'un téraoctet. Deux systèmes de fichiers seulement,
+et la machine le fait respecter : **`exFAT` et `HFS+`** — tout le reste reçoit un
+`160 invalid format`. Un nom de volume peut être donné (`name:`) ; sans lui, le volume garde
+le sien. Ce nom **ne peut pas contenir d'espace** : le protocole lirait le mot suivant comme
+un nouveau paramètre, et l'outil refuse donc en amont.
+
+**Le point à connaître : la machine ne fait pas périmer son jeton.** Un jeton émis quinze
+minutes plus tôt a été accepté et le disque formaté ; aucune commande ne permet d'annuler
+une préparation. La péremption d'une minute tenue par l'outil est donc la **seule** barrière
+qui existe — « Annuler » n'annule que côté outil, jamais côté machine.
+
+Le volume **réseau** n'est pas formatable depuis cet outil, bien que la commande l'accepte :
+c'est un partage commun à tout un parc, et l'effacer par mégarde depuis un contrôleur n'a
+pas le même prix qu'une carte.
+
+Refus possibles, tous distincts : `160 invalid format` (système inconnu), `105 no disk`
+(support absent), `161 invalid token` (jeton jamais émis), `150 invalid state` (jeton déjà
+consommé — ils sont à usage unique).
+
+## L'arbre Ember+
+
+L'outil publie son parc au service Ember+ en **mode libre**. Une machine est un nœud,
+**identifié par son nom d'inventaire** : devant un contrôleur broadcast, « Hyperdeck 3 »
+parle et « 10.1.12.3 » non.
+
+⚠ **Le contrôleur lie son câblage à l'IDENTIFIANT, pas au numéro de chemin** (mesuré sur le
+VSM). Renommer une machine lui fait donc perdre son câblage, alors que la renuméroter est
+transparent. **Figer les noms avant de câbler.** Deux machines de même nom donnent deux
+nœuds indistinguables : l'outil le signale au journal sans renommer d'office, un suffixe
+automatique casserait le câblage de celle qui était déjà là.
+
+Sous chaque machine : l'état et le transport en paramètres directs, puis deux nœuds —
+**Destination** (support actif, état, volume, temps restant, et une position par support) et
+**Formatage** (système de fichiers, support, Préparer, Prêt à confirmer, Confirmer, dernier
+résultat).
+
+Le formatage y est un geste **en deux temps**, jamais un bouton : « Confirmer » n'agit que
+si « Prêt à confirmer » est vrai, et le support choisi retombe à « — » après chaque
+confirmation. Les deux impulsions n'agissent que sur une valeur *vraie* — un contrôleur
+réémet ses valeurs à la reconnexion et au rappel d'un instantané, et un booléen relu ne doit
+rien déclencher.
+
+Les **énumérations sont des contrats** : c'est l'index qui voyage. Les formats de fichier
+viennent de la liste figée de l'outil et non de ce que la machine annonce ; quand elle
+annonce un format hors liste, le paramètre retombe sur « — » et la valeur réelle reste
+lisible dans « Format de fichier (annoncé) ».
+
 ## Ce qui n'est pas (encore) là
 
-- **formatage des supports** (`format: prepare` / `format: confirm`) — destructif, laissé
-  volontairement de côté pour une première version ;
 - **édition de la timeline** (`clips add` / `clips remove` / `playrange`) — la timeline est
   listée, pas modifiée ; là aussi la Console couvre le besoin ponctuel ;
 - **jog / shuttle** au geste — les commandes sont routées côté serveur, mais l'UI n'a pas

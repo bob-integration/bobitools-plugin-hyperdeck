@@ -41,6 +41,17 @@ PORT = 9993
 # termine par « : », jusqu'à une ligne vide.
 _HEADER = re.compile(r"^(\d{3})\s*(.*)$")
 
+# Systèmes de fichiers acceptés au formatage. RELEVÉ sur HyperDeck Studio HD Plus (protocole
+# 1.19, firmware 9.0.2) : tout le reste — « ext4 », « NTFS », n'importe quoi — reçoit un
+# « 160 invalid format ». Ce n'est donc pas une liste de suggestions comme celles de
+# `schema.py` : c'est le domaine réel de la commande, et la machine le fait respecter.
+FILESYSTEMS = ("exFAT", "HFS+")
+
+# Nom du disque externe RÉSEAU. Seul jeton de `device` qui soit un littéral : les disques
+# USB-C reçoivent un identifiant fabriqué par la machine (« usb512 »), et `device: usb` ne
+# désigne rien — mesuré, carte et SSD montés, il répond « 105 no disk ».
+NETWORK_DEVICE = "network"
+
 # Codes asynchrones documentés → rubrique du cache d'état. Les 5xx NON listés ici ne sont
 # pas perdus pour autant : ils atterrissent dans `state["extra"]` avec leur libellé. Le
 # protocole en ajoute au fil des firmwares (timecode affiché, position timeline, images
@@ -54,6 +65,10 @@ ASYNC_MAP = {
 }
 
 MAX_EVENTS = 60             # journal roulant des messages asynchrones, pour le diagnostic
+
+# Délai avant de relire un slot qui vient de se monter (cf. `_schedule_recheck`). Assez long
+# pour laisser la machine finir son calcul, assez court pour que l'écran ne mente pas.
+SLOT_RECHECK_DELAY_S = 3.0
 
 
 class HyperDeckError(Exception):
@@ -181,6 +196,39 @@ def nas_payload(action, url, username=None, password=None):
     return "\r\n".join(lines) + "\r\n\r\n"
 
 
+def parse_external_drives(lines):
+    """Jetons `device` de la réponse `226 external drive info` (`external drive list`).
+
+    Lecture par LIGNES et non par `Response.params` : la réponse répète la clé `device`
+    autant de fois qu'il y a de disques, et un dictionnaire n'en garderait qu'un — le
+    dernier. Même piège que `disk list` et `clips get`.
+    """
+    out = []
+    for line in lines:
+        if ":" not in line:
+            continue
+        k, v = line.split(":", 1)
+        if k.strip() == "device":
+            v = v.strip()
+            if v and v not in out:
+                out.append(v)
+    return out
+
+
+def valid_volume_name(name):
+    """Un nom de volume acceptable au formatage, ou None.
+
+    Le protocole est orienté ligne ET orienté « clé: valeur » : un ESPACE dans la valeur
+    fait lire le mot suivant comme un nouveau paramètre. Mesuré — `prepare: OS X Extended`
+    répond « 100 syntax error » là où `prepare: exFAT` passe. Un nom refusé ici vaut donc
+    mieux qu'une commande tronquée dont on ne saurait pas ce qu'elle a formaté.
+    """
+    n = esc_value(name)
+    if not n or re.search(r"[\s:]", n):
+        return None
+    return n
+
+
 def parse_commands_xml(lines):
     """Noms des commandes déclarées par la réponse `212 commands:` (XML).
 
@@ -227,6 +275,7 @@ class HyperDeckClient:
 
         self._block = None              # bloc 5xx/2xx en cours d'assemblage
         self._state = self._blank_state()
+        self._recheck = set()           # slots dont une relecture différée est déjà en vol
 
     # ------------------------------------------------------------------ état
 
@@ -253,7 +302,17 @@ class HyperDeckClient:
                 "error": None,
                 "read_at": None,
             },
-            "slots": {},            # {slot id: 202 / 502}
+            # {clé: 202 / 502}. La clé est le NUMÉRO de slot quand il y en a un, sinon
+            # « dev:<jeton> » — un disque USB-C non sélectionné se présente avec
+            # `slot id: none`, et les ranger tous sous « none » ferait qu'un second disque
+            # écraserait le premier. Cf. `_slot_key`.
+            "slots": {},
+            "external": {           # disques externes (226 external drive info)
+                "supported": None,  # None = pas encore su ; False = firmware sans la commande
+                "drives": [],       # jetons device énumérés par `external drive list`
+                "selected": None,   # celui qui occupe le slot externe (cf. read_external)
+                "read_at": None,
+            },
             "notify": {},           # 209 notify
             "commands": [],         # capacités déclarées (212 commands)
             "extra": {},            # 5xx non cartographiés, par code
@@ -276,6 +335,9 @@ class HyperDeckClient:
                 nas[k] = list(nas[k])
             nas["network_slot"] = dict(nas["network_slot"])
             s["nas"] = nas
+            ext = dict(s["external"])
+            ext["drives"] = list(ext["drives"])
+            s["external"] = ext
             return s
 
     def supports(self, command):
@@ -521,6 +583,100 @@ class HyperDeckClient:
             pass
         return resp
 
+    # ------------------------------------------------------- disques externes
+
+    def read_external_drives(self):
+        """Jetons `device` des disques externes, et celui qui est sélectionné.
+
+        C'est la commande qui manquait pour voir un SSD USB-C : `external drive list`
+        énumère les disques qui n'ont pas de numéro de slot propre (réseau, USB-C), et
+        `external drive selected` dit lequel occupe le slot externe. Un firmware qui ne les
+        connaît pas est retenu comme tel, pour ne pas le harceler à chaque tour.
+
+        Rend la liste des jetons — vide si la machine ne sait pas répondre.
+        """
+        with self._state_lock:
+            if self._state["external"]["supported"] is False:
+                return list(self._state["external"]["drives"])
+        resp = self.command("external drive list", timeout=10)
+        if resp.code in (100, 103):
+            with self._state_lock:
+                self._state["external"].update(supported=False, read_at=time.time())
+            return []
+        drives = parse_external_drives(resp.lines) if resp.ok else []
+        sel = self.command("external drive selected", timeout=10)
+        selected = (parse_external_drives(sel.lines) or [None])[0] if sel.ok else None
+        with self._state_lock:
+            self._state["external"].update(supported=True, drives=drives,
+                                           selected=selected, read_at=time.time())
+            self._state["updated_at"] = time.time()
+        return drives
+
+    def select_external_drive(self, device):
+        """Choisit le disque externe qui occupera le slot externe.
+
+        ⚠ Les disques externes s'excluent : sélectionner le SSD DÉSÉLECTIONNE le volume
+        réseau, et inversement. Ce n'est pas un détail d'implémentation à masquer — c'est
+        la destination d'enregistrement de la machine qui change. L'appelant doit le dire.
+        """
+        resp = self.command("external drive select: device: %s" % esc_value(device),
+                            timeout=15)
+        if resp.ok:
+            try:
+                self.refresh_slots()        # relit aussi les disques externes
+            except HyperDeckError:
+                pass
+        return resp
+
+    # ------------------------------------------------------------- formatage
+
+    def format_prepare(self, filesystem, device=None, slot_id=None, name=None):
+        """Arme un formatage et rend `(jeton, réponse)`. N'ÉCRIT RIEN sur le support.
+
+        Réponse relevée sur le matériel — et elle ne ressemble pas à ce que la
+        documentation laisse attendre (`code: {token}`) :
+
+            216 format ready
+            odlbiyd                 ← ligne NUE, sept lettres, pas une paire clé/valeur
+
+        Le jeton se lit donc dans `lines`, jamais dans `params`, qui serait vide.
+
+        ⚠ **La machine ne fait pas périmer ce jeton.** Mesuré : un jeton émis quinze
+        minutes plus tôt a été accepté et le disque formaté. Rien côté appareil ne protège
+        d'une préparation armée puis oubliée — c'est à l'appelant de tenir une péremption,
+        et de ne jamais transmettre un `confirm` dont il n'est plus sûr.
+        """
+        parts = []
+        if device:
+            parts.append("device: %s" % esc_value(device))
+        elif slot_id is not None:
+            parts.append("slot id: %s" % esc_value(slot_id))
+        parts.append("prepare: %s" % esc_value(filesystem))
+        if name:
+            parts.append("name: %s" % esc_value(name))
+        resp = self.command("format: " + " ".join(parts), timeout=20)
+        token = None
+        if resp.code == 216:
+            token = (resp.lines or [""])[0].strip() or None
+        return token, resp
+
+    def format_confirm(self, token):
+        """Exécute le formatage armé. DESTRUCTIF, et sans retour possible.
+
+        Codes de refus relevés, tous distincts — ce qui permet de dire à l'opérateur ce
+        qui s'est réellement passé plutôt qu'« échec » :
+          - `161 invalid token` : jeton jamais émis par la machine ;
+          - `150 invalid state` : jeton DÉJÀ consommé (ils sont à usage unique) ;
+          - `200 ok` : formatage terminé, en 4 à 6 secondes sur un SSD d'un téraoctet.
+        """
+        resp = self.command("format: confirm: %s" % esc_value(token), timeout=180)
+        if resp.ok:
+            try:
+                self.refresh_slots()        # relit aussi les disques externes
+            except HyperDeckError:
+                pass
+        return resp
+
     def refresh(self):
         """Relecture complète de l'état par interrogation directe.
 
@@ -552,13 +708,20 @@ class HyperDeckClient:
         if count <= 0:
             resp = self.command("slot info")
             if resp.ok:
-                p = resp.params
-                self._merge_slot(p.get("slot id") or "1", p)
+                self._merge_slot(resp.params, fallback="1")
             return
         for n in range(1, count + 1):
             resp = self.command("slot info: slot id: %d" % n)
             if resp.ok:
-                self._merge_slot(str(n), resp.params)
+                self._merge_slot(resp.params, fallback=str(n))
+        # Les disques externes NON sélectionnés n'apparaissent dans aucun numéro de slot :
+        # le slot externe ne montre que celui qui est sélectionné. Sans cette passe, un SSD
+        # branché mais non choisi serait invisible — donc impossible à formater avant de
+        # l'avoir mis en service, ce qui est précisément l'ordre inverse du bon sens.
+        for dev in self.read_external_drives():
+            resp = self.command("slot info: device: %s" % esc_value(dev))
+            if resp.ok:
+                self._merge_slot(resp.params)
 
     def _set_configuration(self, lines, params):
         """Fusionne les réglages, et ne remplace les entrées XLR que si le bloc en parle.
@@ -573,17 +736,93 @@ class HyperDeckClient:
                 self._state["xlr"] = xlr
             self._state["updated_at"] = time.time()
 
-    def _merge_slot(self, slot_id, params):
+    @staticmethod
+    def _slot_key(params, fallback=None):
+        """Clé de rangement d'un slot : son NUMÉRO, ou « dev:<jeton> » à défaut.
+
+        Un HyperDeck a deux façons de désigner un support, et une seule des deux est
+        universelle. Les lecteurs de cartes ont un numéro (1, 2) ; le slot externe (le
+        dernier numéro, 3 sur un Studio HD Plus) est occupé par le disque externe
+        SÉLECTIONNÉ — réseau ou USB-C. Un disque externe présent mais NON sélectionné n'a
+        alors pas de numéro du tout : il se présente `slot id: none`, et seul son `device`
+        l'adresse. Les ranger tous sous « none » ferait qu'un disque en chasserait un autre.
+        """
+        sid = str(params.get("slot id") or "").strip()
+        dev = str(params.get("device") or "").strip()
+        if sid and sid != "none":
+            return sid
+        if dev:
+            return "dev:%s" % dev
+        return str(fallback) if fallback is not None else "none"
+
+    def _merge_slot(self, params, fallback=None):
         """Fusionne (et n'écrase pas) : une notification `502` peut ne porter qu'une
         partie des champs, et remplacer tout le slot ferait clignoter les valeurs
-        absentes du message."""
-        key = str(slot_id)
+        absentes du message.
+
+        Rend la clé, pour que l'appelant sache où la fusion a atterri."""
+        key = self._slot_key(params, fallback)
         with self._state_lock:
             cur = dict(self._state["slots"].get(key) or {})
+            was = cur.get("status")
             cur.update(params)
-            cur["slot id"] = key
+            # `slot id` n'est plus réécrit avec la clé : sur un disque externe non
+            # sélectionné, la machine dit « none » et c'est la vérité — la clé, elle, est
+            # une commodité de rangement, pas une donnée du protocole.
+            cur.setdefault("slot id", str(fallback) if fallback is not None else "none")
             self._state["slots"][key] = cur
+            # UN support, UNE entrée. Un disque externe change de clé quand il est
+            # sélectionné ou désélectionné : il passe du numéro du slot externe à
+            # « dev:<jeton> », et inversement. Sans ce ménage, l'ancienne clé survit avec
+            # son `slot id` périmé, et c'est elle qu'un index par `device` retrouve — le
+            # volume réseau se lisait alors « non actif » alors qu'il enregistrait.
+            dev = str(cur.get("device") or "").strip()
+            if dev:
+                for other in [k for k, v in self._state["slots"].items()
+                              if k != key and str(v.get("device") or "").strip() == dev]:
+                    del self._state["slots"][other]
             self._state["updated_at"] = time.time()
+        if cur.get("status") == "mounted" and was != "mounted":
+            self._schedule_recheck(key)
+        return key
+
+    def _schedule_recheck(self, key):
+        """Relit un slot quelques secondes après son montage.
+
+        La machine notifie le montage AVANT d'avoir calculé la durée enregistrable :
+        mesuré trois fois, le `502 … status: mounted` porte toujours `recording time: 0`,
+        et la valeur juste arrive dans une notification ultérieure dont le délai n'est pas
+        borné — sur un SSD d'un téraoctet, le cache a affiché « 0 min » alors qu'une
+        lecture directe donnait 8 h 45. Attendre cette correction reviendrait à annoncer un
+        support plein en plein tournage. On relit donc, sans attendre qu'on nous corrige.
+        """
+        with self._state_lock:
+            if key in self._recheck:
+                return              # une relecture est déjà en vol pour ce slot
+            self._recheck.add(key)
+
+        def run():
+            try:
+                time.sleep(SLOT_RECHECK_DELAY_S)
+                slot = (self.state().get("slots") or {}).get(key) or {}
+                dev = slot.get("device")
+                sid = slot.get("slot id")
+                if dev:
+                    cmd = "slot info: device: %s" % esc_value(dev)
+                elif sid and sid != "none":
+                    cmd = "slot info: slot id: %s" % esc_value(sid)
+                else:
+                    return
+                resp = self.command(cmd, timeout=10)
+                if resp.ok:
+                    self._merge_slot(resp.params)
+            except Exception:                           # noqa: BLE001
+                pass                                    # un filet de sécurité ne doit pas mordre
+            finally:
+                with self._state_lock:
+                    self._recheck.discard(key)
+
+        threading.Thread(target=run, daemon=True).start()
 
     # --------------------------------------------------------------- lecture
 
@@ -639,7 +878,7 @@ class HyperDeckClient:
                         protocol_version=params.get("protocol version"))
             self._preamble.set()
         elif topic == "slot":
-            self._merge_slot(params.get("slot id") or "1", params)
+            self._merge_slot(params, fallback="1")
         elif topic == "configuration":
             self._set_configuration(resp.lines, params)
         elif topic in ("transport", "remote"):
