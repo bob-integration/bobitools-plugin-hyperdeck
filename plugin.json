@@ -63,5 +63,214 @@
       "max": 600,
       "label": "Fraîcheur de l'horloge lue sur les machines (secondes) — l'heure ne se relit pas à la seconde"
     }
-  ]
+  ],
+  "permissions": [
+    {
+      "id": "deck.transport",
+      "label": "Piloter le transport",
+      "default_roles": [
+        "operator"
+      ],
+      "description": "Enregistrement, lecture, arrêt, navigation, prise de main (remote)."
+    },
+    {
+      "id": "deck.media",
+      "label": "Choisir le support d'enregistrement",
+      "default_roles": [
+        "operator"
+      ],
+      "description": "Support actif (carte, disque, réseau) et montage d'un chemin réseau."
+    },
+    {
+      "id": "deck.format",
+      "label": "Formater un support",
+      "default_roles": [
+        "operator"
+      ],
+      "description": "Geste irréversible : efface le contenu du support."
+    },
+    {
+      "id": "deck.config",
+      "label": "Régler une machine",
+      "default_roles": [
+        "operator"
+      ],
+      "description": "Réglages (format de fichier, nommage…), horloge, commande brute, redémarrage."
+    },
+    {
+      "id": "deck.manage",
+      "label": "Gérer le parc",
+      "default_roles": [
+        "operator"
+      ],
+      "description": "Ajouter, modifier, supprimer ou importer des machines ; bibliothèque de chemins réseau."
+    }
+  ],
+  "acl": {
+    "resources": [
+      {
+        "key": "deck",
+        "label": "Machines",
+        "choices": "decks",
+        "choices_list": "decks"
+      }
+    ],
+    "routes": [
+      {
+        "method": "POST",
+        "path": "decks/{deck}/reconnect",
+        "perm": null
+      },
+      {
+        "method": "POST",
+        "path": "decks/{deck}/refresh",
+        "perm": null
+      },
+      {
+        "method": "POST",
+        "path": "decks/{deck}/transport",
+        "perm_by": {
+          "field": "body.action",
+          "map": {
+            "reboot": "deck.config"
+          },
+          "default": "deck.transport"
+        },
+        "resource": {
+          "deck": "{deck}"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "decks/{deck}/support",
+        "perm": "deck.media",
+        "resource": {
+          "deck": "{deck}"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "decks/{deck}/nas",
+        "perm": "deck.media",
+        "resource": {
+          "deck": "{deck}"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "decks/{deck}/format",
+        "perm": "deck.format",
+        "resource": {
+          "deck": "{deck}"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "decks/{deck}/format-confirm",
+        "perm": "deck.format",
+        "resource": {
+          "deck": "{deck}"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "decks/{deck}/format-cancel",
+        "perm": "deck.format",
+        "resource": {
+          "deck": "{deck}"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "decks/{deck}/settings",
+        "perm": "deck.config",
+        "resource": {
+          "deck": "{deck}"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "decks/{deck}/clock",
+        "perm": "deck.config",
+        "resource": {
+          "deck": "{deck}"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "decks/{deck}/command",
+        "perm": "deck.config",
+        "resource": {
+          "deck": "{deck}"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "ember/set",
+        "perm_by": {
+          "field": "body.ref.field",
+          "map": {
+            "record": "deck.transport",
+            "remote": "deck.transport",
+            "destination": "deck.media",
+            "prefix": "deck.config",
+            "timestamp": "deck.config",
+            "file_format": "deck.config",
+            "fmt_fs": "deck.format",
+            "fmt_target": "deck.format",
+            "fmt_name": "deck.format",
+            "fmt_prepare": "deck.format",
+            "fmt_confirm": "deck.format"
+          },
+          "default": "deck.config"
+        },
+        "resource": {
+          "deck": "body.ref.deck"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "bulk",
+        "perm_by": {
+          "field": "body.action",
+          "map": {
+            "clock": "deck.config",
+            "settings": "deck.config",
+            "reboot": "deck.config",
+            "nas": "deck.media"
+          },
+          "default": "deck.transport"
+        }
+      },
+      {
+        "method": "PUT",
+        "path": "decks/{deck}",
+        "perm": "deck.manage",
+        "resource": {
+          "deck": "{deck}"
+        }
+      },
+      {
+        "method": "DELETE",
+        "path": "decks/{deck}",
+        "perm": "deck.manage",
+        "resource": {
+          "deck": "{deck}"
+        }
+      },
+      {
+        "method": "*",
+        "path": "decks/{deck}/**",
+        "perm": "deck.config",
+        "resource": {
+          "deck": "{deck}"
+        }
+      },
+      {
+        "method": "*",
+        "path": "**",
+        "perm": "deck.manage"
+      }
+    ]
+  }
 }
