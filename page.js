@@ -107,6 +107,9 @@ window.BTTools.hyperdeck = (function () {
         $("#hd-cards").addEventListener("click", onCardsClick);
         $("#hd-detail").addEventListener("click", onDetailClick);
         $("#hd-detail").addEventListener("change", onDetailChange);
+        // `change` n'arrive qu'à la sortie du champ : sans `input`, une saisie en cours
+        // n'était marquée nulle part et le rafraîchissement l'emportait.
+        $("#hd-detail").addEventListener("input", onDetailInput);
         $("#hd-detail").addEventListener("submit", onDetailSubmit);
 
         loadConfig();
@@ -384,8 +387,23 @@ window.BTTools.hyperdeck = (function () {
     }
 
     // ── Détail ───────────────────────────────────────────────
+    // Le panneau se réécrit toutes les 2 s. Tant que le curseur est DANS un de ses champs,
+    // le réécrire efface ce qu'on est en train de taper — et il n'existe aucun signal fiable
+    // pour distinguer « en train d'écrire » de « a fini » : `change` n'arrive qu'à la sortie
+    // du champ, donc geler sur le seul brouillon laissait toute la frappe à découvert. Le
+    // focus, lui, est vrai dès le premier caractère et sur tous les onglets.
+    // Les cartes, elles, continuent de vivre : seul ce panneau est figé.
+    function saisieEnCours() {
+        const host = $("#hd-detail");
+        const a = document.activeElement;
+        if (!host || !a || !host.contains(a)) return false;
+        return /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)
+            && !/^(button|submit|reset)$/i.test(a.type || "");
+    }
+
     function renderDetail(force) {
         const host = $("#hd-detail");
+        if (!force && saisieEnCours()) return;
         // Dès qu'au moins deux machines sont cochées, le panneau cesse de décrire UNE
         // machine pour décrire la SÉLECTION. Même écran, mêmes champs, mêmes gestes : ce
         // qui change, c'est que chaque champ dit s'il est commun ou s'il diverge, et que
@@ -453,8 +471,11 @@ window.BTTools.hyperdeck = (function () {
 
     function renderSelection(force) {
         const host = $("#hd-detail");
+        if (!force && saisieEnCours()) return;
         if (!SEL_TABS.some(([k]) => k === tab)) tab = "transport";
-        if (tab === "settings" && Object.keys(selDirty).length && !force) return;
+        // Le brouillon gèle le panneau sur TOUS les onglets, pas seulement Réglages : une
+        // valeur saisie sur Transport ou Horloge se perdait au rafraîchissement suivant.
+        if (Object.keys(selDirty).length && !force) return;
         if (!selData) {
             host.innerHTML = '<p class="hd-empty">Lecture des ' + selected.size + " machines…</p>";
             loadSelection(true);
@@ -728,8 +749,10 @@ window.BTTools.hyperdeck = (function () {
         window.alert(p.label + "\n\n" + txt);
     }
 
-    function onSelSettingsChange(e) {
-        const el = e.target;
+    // Enregistrer le brouillon SANS rien redessiner : appelé à chaque frappe. Redessiner ici
+    // détruirait le champ en cours de saisie et ferait perdre le curseur — c'est-à-dire
+    // exactement le défaut qu'on corrige, mais à chaque touche.
+    function noterBrouillonSel(el) {
         if (!el || !el.dataset || !el.dataset.sskey) return;
         const key = el.dataset.sskey;
         const p = (selData.settings || []).find((x) => x.key === key);
@@ -737,7 +760,18 @@ window.BTTools.hyperdeck = (function () {
         // dire « finalement, ne touche pas à ce champ ».
         if (el.value === "" && p && !p.same) delete selDirty[key];
         else selDirty[key] = el.dataset.sstype === "number" ? Number(el.value) : el.value;
-        renderSelection(true);
+    }
+
+    function onSelSettingsChange(e) {
+        const el = e.target;
+        if (!el || !el.dataset || !el.dataset.sskey) return;
+        noterBrouillonSel(el);
+        // Les champs liés se remettent à jour à la sortie du champ — mais seulement si le
+        // curseur a QUITTÉ le panneau. Tabuler d'un champ au suivant déclenche `change` sur
+        // le premier : redessiner alors arracherait le focus au second, et l'on ne pourrait
+        // plus parcourir le formulaire au clavier. Le report d'un tour de boucle laisse au
+        // navigateur le temps de poser le focus avant qu'on décide.
+        setTimeout(() => { if (!saisieEnCours()) renderSelection(true); }, 0);
     }
 
     async function onSelSettingsSubmit(e) {
@@ -1294,6 +1328,18 @@ window.BTTools.hyperdeck = (function () {
             if (detail && data.nas) detail.state.nas = data.nas;
             renderDetail(true);
         } catch (e) { toast(e.message, "error"); }
+    }
+
+    // Frappe en cours : on note, on ne redessine RIEN.
+    function onDetailInput(e) {
+        const el = e.target;
+        if (!el || !el.dataset) return;
+        if (el.dataset.sskey) return noterBrouillonSel(el);
+        if (el.dataset.skey || el.dataset.xlr) {
+            settingsDirty = true;
+            const s = $("#hd-set-state");
+            if (s) s.textContent = "modifications non appliquées";
+        }
     }
 
     function onDetailChange(e) {
