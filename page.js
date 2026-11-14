@@ -111,6 +111,12 @@ window.BTTools.hyperdeck = (function () {
         // n'était marquée nulle part et le rafraîchissement l'emportait.
         $("#hd-detail").addEventListener("input", onDetailInput);
         $("#hd-detail").addEventListener("submit", onDetailSubmit);
+        // Un menu déroulant ouvert à la souris n'a pas forcément le focus (Safari ne le
+        // donne pas au clic) : le panneau se réécrivait sous le menu, qui se refermait sur
+        // la valeur d'origine. On retient donc le menu saisi jusqu'à ce qu'on en sorte.
+        $("#hd-detail").addEventListener("pointerdown", onDetailPointer, true);
+        $("#hd-detail").addEventListener("focusout", (e) => { if (e.target === menuSaisi) menuSaisi = null; });
+        root.addEventListener("pointerdown", (e) => { if (menuSaisi && e.target !== menuSaisi) menuSaisi = null; }, true);
 
         loadConfig();
         // La bibliothèque de chemins est chargée dès le montage : l'onglet Réseau d'une
@@ -393,8 +399,14 @@ window.BTTools.hyperdeck = (function () {
     // du champ, donc geler sur le seul brouillon laissait toute la frappe à découvert. Le
     // focus, lui, est vrai dès le premier caractère et sur tous les onglets.
     // Les cartes, elles, continuent de vivre : seul ce panneau est figé.
+    let menuSaisi = null;              // <select> du panneau ouvert à la souris (cf. mount)
+    function onDetailPointer(e) {
+        const el = e.target && e.target.closest ? e.target.closest("select") : null;
+        menuSaisi = el || null;
+    }
     function saisieEnCours() {
         const host = $("#hd-detail");
+        if (host && menuSaisi && menuSaisi.isConnected && host.contains(menuSaisi)) return true;
         const a = document.activeElement;
         if (!host || !a || !host.contains(a)) return false;
         return /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)
@@ -1345,6 +1357,7 @@ window.BTTools.hyperdeck = (function () {
     function onDetailChange(e) {
         const el = e.target;
         if (!el || !el.dataset) return;
+        if (el === menuSaisi) menuSaisi = null;     // choix fait : le brouillon prend le relais
         if (el.dataset.sskey) return onSelSettingsChange(e);
         if (el.dataset.skey || el.dataset.xlr) {
             settingsDirty = true;
