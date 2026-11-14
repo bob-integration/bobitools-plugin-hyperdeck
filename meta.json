@@ -1,6 +1,11 @@
 {
  "changelog": [
   {
+   "version": "0.5.2",
+   "date": "2026-11-14",
+   "notes": "LE MENU DÉROULANT RESTE OUVERT, SAFARI COMPRIS. La 0.5.1 ne suffisait pas : elle retenait le menu ouvert grâce aux événements du clic, et Safari ne les donne pas (ni focus, ni signal fiable) pour un menu déroulant. Le panneau de détail ne se remplace plus d'un bloc toutes les deux secondes : il compare ce qu'il va afficher à ce qui est affiché et ne remplace que ce qui a changé. Un menu dont le contenu n'a pas bougé reste le même élément, donc reste ouvert, quel que soit le navigateur ; un champ que la machine a modifié est remplacé, à jour. S'applique à une machine seule comme à une sélection. Serveur inchangé."
+  },
+  {
    "version": "0.5.1",
    "date": "2026-11-14",
    "notes": "Réglages : un menu déroulant ne se referme plus tout seul. Le panneau de détail se réécrit toutes les 2 s et ne se figeait que si le champ avait le focus ; un menu ouvert à la souris ne l'a pas toujours (Safari ne le donne pas au clic) : le menu se refermait sur la valeur d'origine avant qu'on choisisse. Le menu saisi est désormais retenu jusqu'au choix, à la sortie du champ ou au clic suivant. Serveur inchangé."

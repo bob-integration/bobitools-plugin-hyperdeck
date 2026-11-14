@@ -399,6 +399,35 @@ window.BTTools.hyperdeck = (function () {
     // du champ, donc geler sur le seul brouillon laissait toute la frappe à découvert. Le
     // focus, lui, est vrai dès le premier caractère et sur tous les onglets.
     // Les cartes, elles, continuent de vivre : seul ce panneau est figé.
+    // Le panneau se réécrit toutes les 2 s. Le remplacer d'un bloc détruisait aussi les
+    // champs qui n'avaient pas changé — dont un menu déroulant OUVERT, qui se refermait sur
+    // sa valeur d'origine (Safari ne lui donne ni le focus au clic, ni de quoi le savoir
+    // ouvert). On ne remplace donc que ce qui DIFFÈRE : un nœud identique reste en place,
+    // menu ouvert compris. Un champ dont le contenu a changé est remplacé entier.
+    function patchHtml(host, html) {
+        const t = document.createElement("template");
+        if (!t.content || typeof host.replaceChildren !== "function") { host.innerHTML = html; return; }
+        t.innerHTML = html;
+        patchKids(host, t.content);
+    }
+    function patchKids(a, b) {
+        const x = Array.from(a.childNodes), y = Array.from(b.childNodes);
+        if (x.length !== y.length) { a.replaceChildren(...y); return; }
+        x.forEach((n, i) => {
+            const m = y[i];
+            if (n.isEqualNode(m)) return;
+            if (n.nodeType === 3 && m.nodeType === 3) { n.nodeValue = m.nodeValue; return; }
+            if (n.nodeType !== 1 || n.nodeName !== m.nodeName || !sameAttrs(n, m)
+                || /^(SELECT|INPUT|TEXTAREA|OPTION)$/.test(n.nodeName)) { n.replaceWith(m); return; }
+            patchKids(n, m);
+        });
+    }
+    function sameAttrs(n, m) {
+        if (n.attributes.length !== m.attributes.length) return false;
+        for (const at of n.attributes) if (m.getAttribute(at.name) !== at.value) return false;
+        return true;
+    }
+
     let menuSaisi = null;              // <select> du panneau ouvert à la souris (cf. mount)
     function onDetailPointer(e) {
         const el = e.target && e.target.closest ? e.target.closest("select") : null;
@@ -436,7 +465,7 @@ window.BTTools.hyperdeck = (function () {
         const tabs = [["transport", "Transport"], ["settings", "Réglages"], ["media", "Médias"],
             ["network", "Réseau"], ["clock", "Horloge"], ["events", "Événements"],
             ["console", "Console"]];
-        host.innerHTML =
+        patchHtml(host,
             '<div class="hd-detail-h">'
             + '<span class="hd-dot ' + (s.connected ? "ok" : "err") + '"></span>'
             + "<strong>" + esc(d.name) + "</strong>"
@@ -457,7 +486,7 @@ window.BTTools.hyperdeck = (function () {
             + tabs.map(([k, lab]) => '<button class="hd-tab' + (k === tab ? " on" : "")
                 + '" data-tab="' + k + '" type="button">' + esc(lab) + "</button>").join("")
             + "</nav>"
-            + '<div class="hd-tabbody">' + tabBody(st, s) + "</div>";
+            + '<div class="hd-tabbody">' + tabBody(st, s) + "</div>");
     }
 
     // ── Panneau de SÉLECTION (deux machines ou plus) ─────────
@@ -500,7 +529,7 @@ window.BTTools.hyperdeck = (function () {
         const decksSel = selData.decks || [];
         const off = decksSel.filter((d) => !d.connected);
         const rec = decksSel.filter((d) => (d.summary || {}).status === "record");
-        host.innerHTML =
+        patchHtml(host,
             '<div class="hd-detail-h hd-sel-h">'
             + '<span class="hd-badge on">' + decksSel.length + " machines</span>"
             + "<strong>" + esc(decksSel.map((d) => d.name).join(", ")) + "</strong>"
@@ -519,7 +548,7 @@ window.BTTools.hyperdeck = (function () {
             + SEL_TABS.map(([k, lab]) => '<button class="hd-tab' + (k === tab ? " on" : "")
                 + '" data-tab="' + k + '" type="button">' + esc(lab) + "</button>").join("")
             + "</nav>"
-            + '<div class="hd-tabbody">' + selTabBody(decksSel) + "</div>";
+            + '<div class="hd-tabbody">' + selTabBody(decksSel) + "</div>");
     }
 
     function selTabBody(decksSel) {
